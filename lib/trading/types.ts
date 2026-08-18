@@ -39,6 +39,8 @@ export interface Position {
   strategy_id: string | null;
   expiration_date: string | null;
   opened_at: string;
+  stop_loss_price: number | null;
+  take_profit_price: number | null;
 }
 
 export interface Trade {

@@ -25,7 +25,7 @@ export default function OrderPanel({
   onUpdatePositionRisk,
 }: {
   account: Account;
-  position: Position | null;
+  position?: Position;
   pendingOrder: PendingOrder | null;
   currentPrice: number;
   buyingPower: number;

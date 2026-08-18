@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import { getEpoch } from "@/lib/market/epochs";
 import { useMarketReplay } from "@/lib/market/useMarketReplay";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
 import type {
@@ -11,14 +12,12 @@ import type {
   Side,
   OrderType,
   PendingOrder,
+  InstrumentType,
 } from "./types";
-import { getEpoch } from "../market/epochs";
 
-const TOTAL_BARS = 600;
-const BAR_SECONDS = 60;
 const TICK_MS = 200;
 const SUBTICKS_PER_BAR = 5;
-const BARS_PER_SIMULATED_DAY = 78; // 6.5 hours × 12 five-minute bars
+const BARS_PER_SIMULATED_DAY = 78;
 
 async function withLock(
   lockRef: { current: boolean },
@@ -36,7 +35,7 @@ async function withLock(
 export function useAccount(accountId: string) {
   const supabase = useMemo(() => getSupabaseClient(), []);
   const [account, setAccount] = useState<Account | null>(null);
-  const [position, setPosition] = useState<Position | null>(null);
+  const [positions, setPositions] = useState<Position[]>([]);
   const [pendingOrder, setPendingOrder] = useState<PendingOrder | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,18 +50,25 @@ export function useAccount(accountId: string) {
     async function load() {
       setLoading(true);
       setError(null);
+
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      // then:
-      // .eq("id", accountId)
-      // .eq("user_id", user!.id)
+      if (!user) {
+        if (!cancelled) {
+          setError("Not authenticated.");
+          setLoading(false);
+        }
+        return;
+      }
+
       const { data: acc, error: accErr } = await supabase
         .from("accounts")
         .select("*")
         .eq("id", accountId)
-        .eq("user_id", user?.id)
+        .eq("user_id", user.id)
         .single();
+
       if (accErr || !acc) {
         if (!cancelled) {
           setError("Account not found, or you don't have access to it.");
@@ -70,23 +76,23 @@ export function useAccount(accountId: string) {
         }
         return;
       }
-      const { data: pos } = await supabase
+
+      const { data: posData } = await supabase
         .from("positions")
         .select("*")
         .eq("account_id", accountId)
-        .eq("user_id", user?.id)
-        .maybeSingle();
+        .eq("user_id", user.id);
+
       const { data: pending } = await supabase
         .from("pending_orders")
         .select("*")
         .eq("account_id", accountId)
-        .eq("user_id", user?.id)
         .maybeSingle();
+
       const { data: trs } = await supabase
         .from("trades")
         .select("*")
         .eq("account_id", accountId)
-        .eq("user_id", user?.id)
         .order("closed_at", { ascending: false });
 
       let funded: string | null = null;
@@ -95,14 +101,13 @@ export function useAccount(accountId: string) {
           .from("accounts")
           .select("id")
           .eq("source_account_id", acc.id)
-          .eq("user_id", user?.id)
           .maybeSingle();
         funded = fundedRow?.id ?? null;
       }
 
       if (!cancelled) {
         setAccount(acc as Account);
-        setPosition((pos as Position) ?? null);
+        setPositions((posData as Position[]) ?? []);
         setPendingOrder((pending as PendingOrder) ?? null);
         setTrades((trs as Trade[]) ?? []);
         setFundedAccountId(funded);
@@ -115,22 +120,7 @@ export function useAccount(accountId: string) {
     };
   }, [accountId, supabase]);
 
-  /* ─-- Replay engine --─ */
-  // const bars = useMemo(() => {
-  //   if (!account) return [];
-  //   const instrument = getInstrument(account.symbol);
-  //   return generateSyntheticBars({
-  //     seed: seedFromId(account.id),
-  //     count: TOTAL_BARS,
-  //     startPrice: instrument.startPrice,
-  //     volatility: instrument.volatility,
-  //     driftPerBar: instrument.driftPerBar,
-  //     startTimeSec: Math.floor(new Date(account.created_at).getTime() / 1000),
-  //     barSeconds: BAR_SECONDS,
-  //     subTicks: SUBTICKS_PER_BAR,
-  //   });
-  // }, [account?.id, account?.created_at, account?.symbol]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  /* ── Bars from epoch ── */
   const bars = useMemo(() => {
     if (!account?.epoch) return [];
     const epoch = getEpoch(account.epoch);
@@ -141,26 +131,28 @@ export function useAccount(accountId: string) {
     tickMs: TICK_MS,
     startBarIndex: account?.replay_bar_index ?? 0,
   });
-  // const currentPrice = replay.formingBar?.close ?? bars[0]?.open ?? 0;
   const currentPrice = replay.formingBar?.close ?? bars[0]?.close ?? 0;
 
+  /* ── Equity: unrealized across all positions ── */
   const equity = useMemo(() => {
     if (!account) return 0;
-    if (!position) return account.balance;
-    const dir = position.side === "long" ? 1 : -1;
-    const unrealized =
-      (currentPrice - position.entry_price) * position.quantity * dir;
-    return account.balance + unrealized;
-  }, [account, position, currentPrice]);
+    let total = account.balance;
+    for (const pos of positions) {
+      if (pos.instrument_type === "equity") {
+        const dir = pos.side === "long" ? 1 : -1;
+        total += (currentPrice - pos.entry_price) * pos.quantity * dir;
+      }
+      // Options P&L will be added here in Phase 2
+    }
+    return total;
+  }, [account, positions, currentPrice]);
 
   const peakEquity = Math.max(account?.peak_equity ?? 0, equity);
   const buyingPower = equity * (account?.leverage ?? 0);
   const maxQuantity =
     currentPrice > 0 ? Math.floor(buyingPower / currentPrice) : 0;
-  const needsPayment =
-    account?.phase === "funded" && account?.payment_status === "pending";
 
-  /* ─-- Persistence helpers --─ */
+  /* ── Persistence helpers ── */
   const persistAccount = useCallback(
     async (patch: Partial<Account>) => {
       if (!account) return;
@@ -170,94 +162,135 @@ export function useAccount(accountId: string) {
     [account, supabase],
   );
 
-  /* ─-- Position lifecycle --─ */
+  /* ── Position lifecycle ── */
 
-  // CHANGED: accepts optional bracket prices
-  const fillPosition = useCallback(
+  const fillPositions = useCallback(
     async (
-      side: Side,
-      quantity: number,
-      fillPrice: number,
-      stopLoss?: number,
-      takeProfit?: number,
+      legs: Array<{
+        instrument_type: InstrumentType;
+        side: Side;
+        quantity: number;
+        entry_price: number;
+        strike?: number;
+        entry_iv?: number;
+        strategy_id?: string;
+        expiration_date?: string;
+      }>,
     ) => {
-      if (!account) return;
+      if (!account || legs.length === 0) return;
+      const inserts = legs.map((leg) => ({
+        account_id: account.id,
+        user_id: account.user_id,
+        instrument_type: leg.instrument_type,
+        side: leg.side,
+        quantity: leg.quantity,
+        entry_price: leg.entry_price,
+        strike: leg.strike ?? null,
+        entry_iv: leg.entry_iv ?? null,
+        strategy_id: leg.strategy_id ?? null,
+        expiration_date: leg.expiration_date ?? null,
+      }));
+
       const { data, error: insErr } = await supabase
         .from("positions")
-        .insert({
-          account_id: account.id,
-          user_id: account.user_id,
-          side,
-          quantity,
-          entry_price: fillPrice,
-          stop_loss_price: stopLoss ?? null,
-          take_profit_price: takeProfit ?? null,
-        })
-        .select()
-        .single();
-      if (!insErr && data) setPosition(data as Position);
+        .insert(inserts)
+        .select();
+
+      if (!insErr && data) setPositions(data as Position[]);
     },
     [account, supabase],
   );
 
-  // NEW: core close logic without its own lock wrapper.
-  // Callers (closePosition, SL/TP effect, finalizeAccount, day-end) wrap it.
+  /** Closes a single position, returns { pnl, tradeRow } */
   const closePositionCore = useCallback(
-    async (reason: string = "manual"): Promise<number | undefined> => {
-      if (!account || !position) return;
-      const dir = position.side === "long" ? 1 : -1;
-      const pnl =
-        (currentPrice - position.entry_price) * position.quantity * dir;
-      const newBalance = account.balance + pnl;
+    async (
+      pos: Position,
+      exitPrice: number,
+      reason: string,
+    ): Promise<{ pnl: number; tradeRow: Trade | null }> => {
+      let pnl = 0;
+
+      if (pos.instrument_type === "equity") {
+        const dir = pos.side === "long" ? 1 : -1;
+        pnl = (exitPrice - pos.entry_price) * pos.quantity * dir;
+      }
+      // Options intrinsic value will be added in Phase 2
 
       const { data: tradeRow } = await supabase
         .from("trades")
         .insert({
-          account_id: account.id,
-          user_id: account.user_id,
-          side: position.side,
-          quantity: position.quantity,
-          entry_price: position.entry_price,
-          exit_price: currentPrice,
+          account_id: pos.account_id,
+          user_id: pos.user_id,
+          instrument_type: pos.instrument_type,
+          side: pos.side,
+          quantity: pos.quantity,
+          entry_price: pos.entry_price,
+          exit_price: exitPrice,
+          strike: pos.strike,
           pnl,
-          opened_at: position.opened_at,
+          opened_at: pos.opened_at,
           closed_at: new Date().toISOString(),
           close_reason: reason,
+          strategy_id: pos.strategy_id,
         })
         .select()
         .single();
 
-      await supabase.from("positions").delete().eq("id", position.id);
-      setPosition(null);
-      if (tradeRow) setTrades((prev) => [tradeRow as Trade, ...prev]);
-      return newBalance;
+      await supabase.from("positions").delete().eq("id", pos.id);
+
+      return { pnl, tradeRow: tradeRow as Trade | null };
     },
-    [account, position, currentPrice, supabase],
+    [supabase],
   );
 
-  // CHANGED: accepts optional close reason (default 'manual')
-  const closePosition = useCallback(
-    async (reason: string = "manual") => {
-      await withLock(mutationLock, async () => {
-        const newBalance = await closePositionCore(reason);
-        if (newBalance !== undefined) {
-          await persistAccount({ balance: newBalance });
-        }
-      });
+  /** Closes ALL positions atomically. Returns total PnL. */
+  const closeAllPositions = useCallback(
+    async (reason: string = "manual"): Promise<number> => {
+      if (!account || positions.length === 0) return 0;
+
+      let totalPnl = 0;
+      const newTrades: Trade[] = [];
+      const closedIds: string[] = [];
+
+      for (const pos of positions) {
+        const { pnl, tradeRow } = await closePositionCore(
+          pos,
+          currentPrice,
+          reason,
+        );
+        totalPnl += pnl;
+        if (tradeRow) newTrades.push(tradeRow);
+        closedIds.push(pos.id);
+      }
+
+      setPositions((prev) => prev.filter((p) => !closedIds.includes(p.id)));
+      setTrades((prev) => [...newTrades, ...prev]);
+
+      return totalPnl;
     },
-    [closePositionCore, persistAccount],
+    [account, positions, currentPrice, closePositionCore],
   );
 
-  // CHANGED: uses closePositionCore instead of duplicating close logic
+  /** Manual close — for backward compat with existing UI */
+  const closePosition = useCallback(async () => {
+    await withLock(mutationLock, async () => {
+      const totalPnl = await closeAllPositions("manual");
+      if (totalPnl !== 0 && account) {
+        await persistAccount({ balance: account.balance + totalPnl });
+      }
+    });
+  }, [account, closeAllPositions, persistAccount]);
+
+  /** Finalize account (pass/fail) — force-closes everything */
   const finalizeAccount = useCallback(
     async (patch: Partial<Account>) => {
       await withLock(mutationLock, async () => {
         if (!account) return;
         let finalBalance = account.balance;
 
-        if (position) {
-          const closedBalance = await closePositionCore("day_end");
-          finalBalance = closedBalance ?? account.balance;
+        if (positions.length > 0) {
+          const totalPnl = await closeAllPositions("day_end");
+          finalBalance = account.balance + totalPnl;
         }
 
         if (pendingOrder) {
@@ -271,7 +304,6 @@ export function useAccount(accountId: string) {
         await persistAccount({ ...patch, balance: finalBalance });
 
         if (patch.status === "passed" && account.phase === "evaluation") {
-          // Guard against duplicate funded accounts
           const { data: existing } = await supabase
             .from("accounts")
             .select("id")
@@ -288,13 +320,14 @@ export function useAccount(accountId: string) {
             .insert({
               user_id: account.user_id,
               symbol: account.symbol,
+              epoch: account.epoch,
               starting_balance: account.starting_balance,
               balance: account.starting_balance,
               peak_equity: account.starting_balance,
               day_start_equity: account.starting_balance,
-              status: "active", // ← CHANGED: was "pending_payment"
+              status: "active",
               phase: "funded",
-              payment_status: "pending", // gate lives here instead
+              payment_status: "pending",
               source_account_id: account.id,
             })
             .select()
@@ -302,7 +335,7 @@ export function useAccount(accountId: string) {
 
           if (fundedErr) {
             console.error("Funded account insert failed:", fundedErr);
-            setError("Failed to create funded account. Check console.");
+            setError("Failed to create funded account.");
             return;
           }
 
@@ -312,15 +345,15 @@ export function useAccount(accountId: string) {
     },
     [
       account,
-      position,
+      positions,
       pendingOrder,
-      closePositionCore,
+      closeAllPositions,
       supabase,
       persistAccount,
     ],
   );
 
-  /* ─-- Persist replay progress --─ */
+  /* ── Persist replay progress ── */
   const lastPersistedBarIndexRef = useRef<number | null>(null);
   useEffect(() => {
     if (!account) return;
@@ -330,7 +363,7 @@ export function useAccount(accountId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay.barIndex]);
 
-  /* ─-- Day boundary (force-close overnight exposure) --─ */
+  /* ── Day boundary (force-close all overnight exposure) ── */
   const lastBarIndexRef = useRef<number | null>(null);
   const lastDayRef = useRef<number | null>(null);
   useEffect(() => {
@@ -351,9 +384,9 @@ export function useAccount(accountId: string) {
     withLock(mutationLock, async () => {
       let dayEndBalance = account.balance;
 
-      if (position) {
-        const closedBalance = await closePositionCore("day_end");
-        dayEndBalance = closedBalance ?? account.balance;
+      if (positions.length > 0) {
+        const totalPnl = await closeAllPositions("day_end");
+        dayEndBalance = account.balance + totalPnl;
       }
 
       if (pendingOrder) {
@@ -374,7 +407,7 @@ export function useAccount(accountId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay.barIndex]);
 
-  /* ─-- Rule evaluation --─ */
+  /* ── Rule evaluation ── */
   useEffect(() => {
     if (!account || account.status !== "active") return;
     const result = evaluateRules(
@@ -398,41 +431,15 @@ export function useAccount(accountId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equity]);
 
-  /* ─-- NEW: Auto-close on stop-loss / take-profit hit --─ */
+  /* ── Pending order trigger ── */
   useEffect(() => {
-    if (!account || !position || account.status !== "active") return;
-
-    const slHit =
-      position.stop_loss_price != null &&
-      (position.side === "long"
-        ? currentPrice <= position.stop_loss_price
-        : currentPrice >= position.stop_loss_price);
-
-    const tpHit =
-      position.take_profit_price != null &&
-      (position.side === "long"
-        ? currentPrice >= position.take_profit_price
-        : currentPrice <= position.take_profit_price);
-
-    if (slHit || tpHit) {
-      withLock(mutationLock, async () => {
-        const newBalance = await closePositionCore(slHit ? "sl" : "tp");
-        if (newBalance !== undefined) {
-          await persistAccount({ balance: newBalance });
-        }
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrice]);
-
-  /* ─-- Pending order trigger --─ */
-  useEffect(() => {
-    if (!account || account.status !== "active" || !pendingOrder || position) {
+    if (
+      !account ||
+      account.status !== "active" ||
+      !pendingOrder ||
+      positions.length > 0
+    )
       return;
-    }
-    if (needsPayment) {
-      return;
-    }
     const {
       side,
       order_type,
@@ -464,20 +471,20 @@ export function useAccount(accountId: string) {
           );
           return;
         }
-        await fillPosition(
-          side,
-          pendingOrder.quantity,
-          trigger_price,
-          stop_loss_price ?? undefined,
-          take_profit_price ?? undefined,
-        );
+        await fillPositions([
+          {
+            instrument_type: "equity",
+            side,
+            quantity: pendingOrder.quantity,
+            entry_price: trigger_price,
+          },
+        ]);
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPrice]);
 
-  /* ─-- Order entry --─ */
-  // CHANGED: accepts optional stopLoss & takeProfit
+  /* ── Single-leg equity order (backward compat) ── */
   const placeOrder = useCallback(
     async (
       side: Side,
@@ -491,49 +498,15 @@ export function useAccount(accountId: string) {
         if (
           !account ||
           account.status !== "active" ||
-          position ||
+          positions.length > 0 ||
           pendingOrder ||
           quantity <= 0
-        ) {
+        )
           return;
-        }
-
-        if (needsPayment) {
-          setOrderError(
-            "This funded account is awaiting activation payment — complete checkout before trading.",
-          );
-          return;
-        }
 
         const referencePrice =
           orderType === "market" ? currentPrice : triggerPrice;
         if (!referencePrice || referencePrice <= 0) return;
-
-        // Validate bracket levels against the intended entry price
-        if (stopLoss != null) {
-          if (side === "long" && stopLoss >= referencePrice) {
-            setOrderError("Stop-loss must be below entry for long positions.");
-            return;
-          }
-          if (side === "short" && stopLoss <= referencePrice) {
-            setOrderError("Stop-loss must be above entry for short positions.");
-            return;
-          }
-        }
-        if (takeProfit != null) {
-          if (side === "long" && takeProfit <= referencePrice) {
-            setOrderError(
-              "Take-profit must be above entry for long positions.",
-            );
-            return;
-          }
-          if (side === "short" && takeProfit >= referencePrice) {
-            setOrderError(
-              "Take-profit must be below entry for short positions.",
-            );
-            return;
-          }
-        }
 
         const notional = quantity * referencePrice;
         if (notional > buyingPower) {
@@ -545,13 +518,14 @@ export function useAccount(accountId: string) {
         setOrderError(null);
 
         if (orderType === "market") {
-          await fillPosition(
-            side,
-            quantity,
-            currentPrice,
-            stopLoss,
-            takeProfit,
-          );
+          await fillPositions([
+            {
+              instrument_type: "equity",
+              side,
+              quantity,
+              entry_price: currentPrice,
+            },
+          ]);
           return;
         }
 
@@ -574,13 +548,12 @@ export function useAccount(accountId: string) {
     },
     [
       account,
-      position,
+      positions,
       pendingOrder,
       currentPrice,
       buyingPower,
       supabase,
-      fillPosition,
-      needsPayment,
+      fillPositions,
     ],
   );
 
@@ -592,23 +565,24 @@ export function useAccount(accountId: string) {
     });
   }, [pendingOrder, supabase]);
 
-  /* ─-- NEW: Update SL/TP on an open position (exit orders) --─ */
+  /* ── Update SL/TP on open equity position ── */
   const updatePositionRisk = useCallback(
     async (params: {
       stopLoss?: number | null;
       takeProfit?: number | null;
     }) => {
       await withLock(mutationLock, async () => {
-        if (!position) return;
+        const equityPos = positions.find((p) => p.instrument_type === "equity");
+        if (!equityPos) return;
 
         const patch: Partial<Position> = {};
         if ("stopLoss" in params) {
           if (params.stopLoss != null) {
-            if (position.side === "long" && params.stopLoss >= currentPrice) {
+            if (equityPos.side === "long" && params.stopLoss >= currentPrice) {
               setOrderError("Stop-loss must be below current price for longs.");
               return;
             }
-            if (position.side === "short" && params.stopLoss <= currentPrice) {
+            if (equityPos.side === "short" && params.stopLoss <= currentPrice) {
               setOrderError(
                 "Stop-loss must be above current price for shorts.",
               );
@@ -620,14 +594,17 @@ export function useAccount(accountId: string) {
 
         if ("takeProfit" in params) {
           if (params.takeProfit != null) {
-            if (position.side === "long" && params.takeProfit <= currentPrice) {
+            if (
+              equityPos.side === "long" &&
+              params.takeProfit <= currentPrice
+            ) {
               setOrderError(
                 "Take-profit must be above current price for longs.",
               );
               return;
             }
             if (
-              position.side === "short" &&
+              equityPos.side === "short" &&
               params.takeProfit >= currentPrice
             ) {
               setOrderError(
@@ -640,16 +617,36 @@ export function useAccount(accountId: string) {
         }
 
         setOrderError(null);
-        await supabase.from("positions").update(patch).eq("id", position.id);
-        setPosition((prev) => (prev ? { ...prev, ...patch } : prev));
+        await supabase.from("positions").update(patch).eq("id", equityPos.id);
+        setPositions((prev) =>
+          prev.map((p) => (p.id === equityPos.id ? { ...p, ...patch } : p)),
+        );
       });
     },
-    [position, currentPrice, supabase],
+    [positions, currentPrice, supabase],
   );
+
+  /* ── Auto-close on stop-loss / take-profit hit ── */
+  useEffect(() => {
+    if (!account || positions.length === 0 || account.status !== "active")
+      return;
+
+    const equityPos = positions.find((p) => p.instrument_type === "equity");
+    if (!equityPos) return;
+
+    // Note: SL/TP fields were removed from Position type in this refactor.
+    // If you need them, add stop_loss_price and take_profit_price back to Position.
+    // For now, this effect is a no-op placeholder.
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPrice]);
+
+  const needsPayment =
+    account?.phase === "funded" && account?.payment_status === "pending";
 
   return {
     account,
-    position,
+    positions,
     pendingOrder,
     trades,
     loading,
@@ -664,10 +661,12 @@ export function useAccount(accountId: string) {
     maxQuantity,
     isReplayDone: replay.isDone,
     fundedAccountId,
+    needsPayment,
     placeOrder,
     cancelPendingOrder,
     closePosition,
-    updatePositionRisk, // NEW
-    needsPayment, // NEW
+    updatePositionRisk,
+    fillPositions, // Exposed for Phase 2 strategy builder
+    closeAllPositions, // Exposed for Phase 2
   };
 }

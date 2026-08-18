@@ -14,7 +14,7 @@ import { useEffect } from "react";
 export default function TradeClient({ accountId }: { accountId: string }) {
   const {
     account,
-    position,
+    positions,
     pendingOrder,
     trades,
     loading,
@@ -144,7 +144,7 @@ export default function TradeClient({ accountId }: { accountId: string }) {
           />
           <OrderPanel
             account={account}
-            position={position}
+            position={positions[0]}
             pendingOrder={pendingOrder}
             currentPrice={currentPrice}
             buyingPower={buyingPower}
