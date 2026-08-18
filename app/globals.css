@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0a0a0c;
+  --color-surface: #121216;
+  --color-surface-2: #1a1a20;
+  --color-border: #26262e;
+  --color-accent: #6366f1;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+  --color-text: #e4e4e7;
+  --color-muted: #8b8b96;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+@utility card {
+  @apply bg-surface border border-border rounded-2xl;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
+         transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+}
+
+@utility btn-buy {
+  @apply btn bg-success text-black hover:opacity-90;
+}
+
+@utility btn-sell {
+  @apply btn bg-danger text-white hover:opacity-90;
+}
+
+@utility btn-secondary {
+  @apply btn bg-surface-2 border border-border hover:bg-white/5;
+}
+
+@utility input {
+  @apply w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm outline-none
+         focus:ring-2 focus:ring-accent;
+}
+
+@utility badge {
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+}
