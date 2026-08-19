@@ -34,6 +34,8 @@ export default function TradeClient({ accountId }: { accountId: string }) {
     closePosition,
     updatePositionRisk,
     needsPayment,
+    optionsChain,
+    placeOptionOrder,
   } = useAccount(accountId);
 
   const searchParams = useSearchParams();
@@ -144,7 +146,7 @@ export default function TradeClient({ accountId }: { accountId: string }) {
           />
           <OrderPanel
             account={account}
-            position={positions[0]}
+            positions={positions}
             pendingOrder={pendingOrder}
             currentPrice={currentPrice}
             buyingPower={buyingPower}
@@ -154,6 +156,8 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             onCancelOrder={cancelPendingOrder}
             onClosePosition={closePosition}
             onUpdatePositionRisk={updatePositionRisk}
+            onPlaceOptionOrder={placeOptionOrder}
+            optionsChain={optionsChain}
           />
           {isReplayDone && (
             <p className="text-xs text-muted">

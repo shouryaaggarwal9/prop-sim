@@ -14,6 +14,13 @@ import type {
   PendingOrder,
   InstrumentType,
 } from "./types";
+import {
+  generateOptionsChain,
+  updateChainPrices,
+  getLegPrice,
+  getIntrinsicValue,
+  type OptionsChain,
+} from "@/lib/market/options";
 
 const TICK_MS = 200;
 const SUBTICKS_PER_BAR = 5;
@@ -43,6 +50,8 @@ export function useAccount(accountId: string) {
   const [orderError, setOrderError] = useState<string | null>(null);
   const [fundedAccountId, setFundedAccountId] = useState<string | null>(null);
   const mutationLock = useRef(false);
+  const [optionsChain, setOptionsChain] = useState<OptionsChain | null>(null);
+  const lastKnownVixRef = useRef<number>(16.0);
 
   /* ── Load account + relations ── */
   useEffect(() => {
@@ -137,15 +146,48 @@ export function useAccount(accountId: string) {
   const equity = useMemo(() => {
     if (!account) return 0;
     let total = account.balance;
+
     for (const pos of positions) {
       if (pos.instrument_type === "equity") {
         const dir = pos.side === "long" ? 1 : -1;
         total += (currentPrice - pos.entry_price) * pos.quantity * dir;
+      } else if (
+        pos.instrument_type === "call" ||
+        pos.instrument_type === "put"
+      ) {
+        const leg = optionsChain
+          ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
+          : null;
+        const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
+        total += (mark - pos.entry_price) * pos.quantity * 100;
       }
-      // Options P&L will be added here in Phase 2
     }
     return total;
-  }, [account, positions, currentPrice]);
+  }, [account, positions, currentPrice, optionsChain]);
+
+  const getCalendarDate = useCallback(() => {
+    if (!account || bars.length === 0) return null;
+    const barTime = bars[replay.barIndex]?.time;
+    if (!barTime) return null;
+    return new Date(barTime * 1000).toISOString().split("T")[0];
+  }, [account, bars, replay.barIndex]);
+
+  const generateDayChain = useCallback(() => {
+    if (!account || bars.length === 0) return;
+    const dateStr = getCalendarDate();
+    if (!dateStr) return;
+
+    const epoch = getEpoch(account.epoch);
+    let vix = epoch?.vix?.[dateStr] ?? lastKnownVixRef.current;
+    lastKnownVixRef.current = vix;
+
+    const barsIntoDay = replay.barIndex % BARS_PER_SIMULATED_DAY;
+    const barsRemaining = BARS_PER_SIMULATED_DAY - barsIntoDay;
+    const hoursToClose = (barsRemaining * 5) / 60; // 5 minutes per bar
+
+    const chain = generateOptionsChain(currentPrice, vix, hoursToClose);
+    setOptionsChain(chain);
+  }, [account, bars, replay.barIndex, currentPrice, getCalendarDate]);
 
   const peakEquity = Math.max(account?.peak_equity ?? 0, equity);
   const buyingPower = equity * (account?.leverage ?? 0);
@@ -213,8 +255,10 @@ export function useAccount(accountId: string) {
       if (pos.instrument_type === "equity") {
         const dir = pos.side === "long" ? 1 : -1;
         pnl = (exitPrice - pos.entry_price) * pos.quantity * dir;
+      } else {
+        // Options: exitPrice is intrinsic at day end, or mark during day
+        pnl = (exitPrice - pos.entry_price) * pos.quantity * 100;
       }
-      // Options intrinsic value will be added in Phase 2
 
       const { data: tradeRow } = await supabase
         .from("trades")
@@ -253,9 +297,21 @@ export function useAccount(accountId: string) {
       const closedIds: string[] = [];
 
       for (const pos of positions) {
+        let exitPrice: number;
+
+        if (pos.instrument_type === "equity") {
+          exitPrice = currentPrice;
+        } else {
+          exitPrice = getIntrinsicValue(
+            pos.instrument_type,
+            currentPrice,
+            pos.strike ?? 0,
+          );
+        }
+
         const { pnl, tradeRow } = await closePositionCore(
           pos,
-          currentPrice,
+          exitPrice,
           reason,
         );
         totalPnl += pnl;
@@ -366,6 +422,7 @@ export function useAccount(accountId: string) {
   /* ── Day boundary (force-close all overnight exposure) ── */
   const lastBarIndexRef = useRef<number | null>(null);
   const lastDayRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (!account || account.status !== "active") return;
     const day = Math.floor(replay.barIndex / BARS_PER_SIMULATED_DAY);
@@ -376,6 +433,7 @@ export function useAccount(accountId: string) {
 
     if (!isSequential) {
       lastDayRef.current = day;
+      generateDayChain(); // Generate chain on mount/resume
       return;
     }
     if (day === lastDayRef.current) return;
@@ -403,9 +461,30 @@ export function useAccount(accountId: string) {
         day_start_equity: dayEndBalance,
         daily_pnls: [...account.daily_pnls, completedDayPnL],
       });
+
+      // New day: generate fresh chain
+      generateDayChain();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay.barIndex]);
+
+  useEffect(() => {
+    if (!optionsChain || !account || account.status !== "active") return;
+    const barsIntoDay = replay.barIndex % BARS_PER_SIMULATED_DAY;
+    const barsRemaining = BARS_PER_SIMULATED_DAY - barsIntoDay;
+    const hoursToClose = (barsRemaining * 5) / 60;
+
+    if (Math.abs(hoursToClose - optionsChain.hoursToClose) > 0.1) {
+      setOptionsChain(
+        updateChainPrices(optionsChain, currentPrice, hoursToClose),
+      );
+    } else if (Math.abs(currentPrice - optionsChain.underlyingPrice) > 0.05) {
+      setOptionsChain(
+        updateChainPrices(optionsChain, currentPrice, hoursToClose),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPrice, replay.barIndex]);
 
   /* ── Rule evaluation ── */
   useEffect(() => {
@@ -644,6 +723,52 @@ export function useAccount(accountId: string) {
   const needsPayment =
     account?.phase === "funded" && account?.payment_status === "pending";
 
+  const placeOptionOrder = useCallback(
+    async (type: "call" | "put", strike: number, quantity: number) => {
+      await withLock(mutationLock, async () => {
+        if (
+          !account ||
+          account.status !== "active" ||
+          !optionsChain ||
+          quantity <= 0
+        )
+          return;
+
+        const leg = getLegPrice(optionsChain, type, strike);
+        if (!leg) {
+          setOrderError("Selected strike not available in current chain.");
+          return;
+        }
+
+        const premium = leg.ask * quantity * 100;
+        if (premium > account.balance) {
+          setOrderError(
+            `Premium ($${premium.toFixed(0)}) exceeds available cash ($${account.balance.toFixed(0)}). Options require full cash coverage.`,
+          );
+          return;
+        }
+
+        setOrderError(null);
+
+        const dateStr =
+          getCalendarDate() ?? new Date().toISOString().split("T")[0];
+
+        await fillPositions([
+          {
+            instrument_type: type,
+            side: "long",
+            quantity,
+            entry_price: leg.ask,
+            strike,
+            entry_iv: leg.iv,
+            expiration_date: dateStr,
+          },
+        ]);
+      });
+    },
+    [account, optionsChain, getCalendarDate, fillPositions],
+  );
+
   return {
     account,
     positions,
@@ -668,5 +793,7 @@ export function useAccount(accountId: string) {
     updatePositionRisk,
     fillPositions, // Exposed for Phase 2 strategy builder
     closeAllPositions, // Exposed for Phase 2
+    placeOptionOrder,
+    optionsChain,
   };
 }

@@ -1,0 +1,280 @@
+const RISK_FREE_RATE = 0.05;
+const STRIKE_INCREMENT = 2.5;
+const STRIKE_RANGE_PCT = 0.05; // ±5% around underlying
+const SKEW = -2.5;
+const SMILE = 15.0;
+
+function normCDF(x: number): number {
+  const a1 = 0.254829592;
+  const a2 = -0.284496736;
+  const a3 = 1.421413741;
+  const a4 = -1.453152027;
+  const a5 = 1.061405429;
+  const p = 0.3275911;
+
+  const sign = x < 0 ? -1 : 1;
+  const absX = Math.abs(x) / Math.sqrt(2);
+  const t = 1.0 / (1.0 + p * absX);
+  const y =
+    1.0 -
+    ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * Math.exp(-absX * absX);
+
+  return 0.5 * (1.0 + sign * y);
+}
+
+function normPDF(x: number): number {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+}
+
+interface BSGreeks {
+  price: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+}
+
+function blackScholes(
+  S: number,
+  K: number,
+  T: number,
+  r: number,
+  sigma: number,
+  type: "call" | "put",
+): BSGreeks {
+  const minT = 1 / 24 / 60; // 1 minute in years
+  const effectiveT = Math.max(T, minT);
+
+  const d1 =
+    (Math.log(S / K) + (r + 0.5 * sigma * sigma) * effectiveT) /
+    (sigma * Math.sqrt(effectiveT));
+  const d2 = d1 - sigma * Math.sqrt(effectiveT);
+
+  const Nd1 = normCDF(d1);
+  const Nd2 = normCDF(d2);
+  const Nd1Neg = normCDF(-d1);
+  const Nd2Neg = normCDF(-d2);
+  const pdfD1 = normPDF(d1);
+
+  const discount = Math.exp(-r * effectiveT);
+
+  let price: number;
+  let delta: number;
+  let gamma: number;
+  let theta: number;
+  let vega: number;
+
+  if (type === "call") {
+    price = S * Nd1 - K * discount * Nd2;
+    delta = Nd1;
+    theta =
+      (-(S * pdfD1 * sigma) / (2 * Math.sqrt(effectiveT)) -
+        r * K * discount * Nd2) /
+      365;
+  } else {
+    price = K * discount * Nd2Neg - S * Nd1Neg;
+    delta = Nd1 - 1;
+    theta =
+      (-(S * pdfD1 * sigma) / (2 * Math.sqrt(effectiveT)) +
+        r * K * discount * Nd2Neg) /
+      365;
+  }
+
+  gamma = pdfD1 / (S * sigma * Math.sqrt(effectiveT));
+  vega = (S * pdfD1 * Math.sqrt(effectiveT)) / 100; // per 1 vol point
+
+  // If effectively expired (T < 1 minute), override with intrinsic
+  if (T <= minT) {
+    const intrinsic = type === "call" ? Math.max(0, S - K) : Math.max(0, K - S);
+    price = intrinsic;
+    delta = type === "call" ? (S > K ? 1 : 0) : S < K ? -1 : 0;
+    gamma = 0;
+    theta = 0;
+    vega = 0;
+  }
+
+  return { price, delta, gamma, theta, vega };
+}
+
+export interface OptionLeg {
+  strike: number;
+  type: "call" | "put";
+  iv: number;
+  price: number;
+  bid: number;
+  ask: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  intrinsic: number;
+  timeValue: number;
+}
+
+export interface OptionsChain {
+  underlyingPrice: number;
+  atmStrike: number;
+  vix: number;
+  hoursToClose: number;
+  calls: OptionLeg[];
+  puts: OptionLeg[];
+}
+
+function computeIV(
+  underlyingPrice: number,
+  strike: number,
+  vix: number,
+): number {
+  const moneyness = Math.log(strike / underlyingPrice);
+  const iv = vix + SKEW * moneyness + SMILE * moneyness * moneyness;
+  return Math.max(0.01, iv / 100); // clamp minimum 1% vol, return as decimal
+}
+
+function computeSpread(underlyingPrice: number, strike: number): number {
+  const distance = Math.abs(strike - underlyingPrice) / underlyingPrice;
+  return Math.max(0.02, 0.02 + 2.0 * distance);
+}
+
+function generateStrikes(underlyingPrice: number): number[] {
+  const center =
+    Math.round(underlyingPrice / STRIKE_INCREMENT) * STRIKE_INCREMENT;
+  const range = underlyingPrice * STRIKE_RANGE_PCT;
+  const strikes: number[] = [];
+
+  let s = center;
+  while (s >= center - range) {
+    strikes.unshift(Math.round(s * 100) / 100);
+    s -= STRIKE_INCREMENT;
+  }
+
+  s = center + STRIKE_INCREMENT;
+  while (s <= center + range) {
+    strikes.push(Math.round(s * 100) / 100);
+    s += STRIKE_INCREMENT;
+  }
+
+  return strikes;
+}
+
+export function generateOptionsChain(
+  underlyingPrice: number,
+  vix: number,
+  hoursToClose: number,
+): OptionsChain {
+  const T = hoursToClose / 24 / 365;
+  const strikes = generateStrikes(underlyingPrice);
+  const atmStrike =
+    Math.round(underlyingPrice / STRIKE_INCREMENT) * STRIKE_INCREMENT;
+
+  const calls: OptionLeg[] = [];
+  const puts: OptionLeg[] = [];
+
+  for (const strike of strikes) {
+    const iv = computeIV(underlyingPrice, strike, vix);
+
+    const callGreeks = blackScholes(
+      underlyingPrice,
+      strike,
+      T,
+      RISK_FREE_RATE,
+      iv,
+      "call",
+    );
+    const putGreeks = blackScholes(
+      underlyingPrice,
+      strike,
+      T,
+      RISK_FREE_RATE,
+      iv,
+      "put",
+    );
+
+    const callSpread = computeSpread(underlyingPrice, strike);
+    const putSpread = computeSpread(underlyingPrice, strike);
+
+    calls.push({
+      strike,
+      type: "call",
+      iv: Math.round(iv * 10000) / 10000,
+      price: Math.round(callGreeks.price * 100) / 100,
+      bid: Math.max(
+        0.01,
+        Math.round((callGreeks.price - callSpread / 2) * 100) / 100,
+      ),
+      ask: Math.max(
+        0.01,
+        Math.round((callGreeks.price + callSpread / 2) * 100) / 100,
+      ),
+      delta: Math.round(callGreeks.delta * 100) / 100,
+      gamma: Math.round(callGreeks.gamma * 10000) / 10000,
+      theta: Math.round(callGreeks.theta * 100) / 100,
+      vega: Math.round(callGreeks.vega * 100) / 100,
+      intrinsic: Math.max(0, underlyingPrice - strike),
+      timeValue: Math.max(
+        0,
+        callGreeks.price - Math.max(0, underlyingPrice - strike),
+      ),
+    });
+
+    puts.push({
+      strike,
+      type: "put",
+      iv: Math.round(iv * 10000) / 10000,
+      price: Math.round(putGreeks.price * 100) / 100,
+      bid: Math.max(
+        0.01,
+        Math.round((putGreeks.price - putSpread / 2) * 100) / 100,
+      ),
+      ask: Math.max(
+        0.01,
+        Math.round((putGreeks.price + putSpread / 2) * 100) / 100,
+      ),
+      delta: Math.round(putGreeks.delta * 100) / 100,
+      gamma: Math.round(putGreeks.gamma * 10000) / 10000,
+      theta: Math.round(putGreeks.theta * 100) / 100,
+      vega: Math.round(putGreeks.vega * 100) / 100,
+      intrinsic: Math.max(0, strike - underlyingPrice),
+      timeValue: Math.max(
+        0,
+        putGreeks.price - Math.max(0, strike - underlyingPrice),
+      ),
+    });
+  }
+
+  return {
+    underlyingPrice,
+    atmStrike,
+    vix,
+    hoursToClose,
+    calls,
+    puts,
+  };
+}
+
+export function updateChainPrices(
+  chain: OptionsChain,
+  underlyingPrice: number,
+  hoursToClose: number,
+): OptionsChain {
+  // Re-generating is cheap (~50 strikes). Just rebuild.
+  return generateOptionsChain(underlyingPrice, chain.vix, hoursToClose);
+}
+
+export function getLegPrice(
+  chain: OptionsChain,
+  type: "call" | "put",
+  strike: number,
+): OptionLeg | undefined {
+  const legs = type === "call" ? chain.calls : chain.puts;
+  return legs.find((l) => Math.abs(l.strike - strike) < 0.01);
+}
+
+export function getIntrinsicValue(
+  type: "call" | "put",
+  underlyingPrice: number,
+  strike: number,
+): number {
+  return type === "call"
+    ? Math.max(0, underlyingPrice - strike)
+    : Math.max(0, strike - underlyingPrice);
+}
