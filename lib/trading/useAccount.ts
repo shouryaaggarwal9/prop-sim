@@ -22,6 +22,14 @@ import {
   type OptionsChain,
 } from "@/lib/market/options";
 
+import {
+  analyzeStrategy,
+  validateStrategy,
+  STRATEGY_CONFIGS,
+  type StrategyType,
+  type StrategyLegInput,
+} from "@/lib/market/strategies";
+
 const TICK_MS = 200;
 const SUBTICKS_PER_BAR = 5;
 const BARS_PER_SIMULATED_DAY = 78;
@@ -52,6 +60,12 @@ export function useAccount(accountId: string) {
   const mutationLock = useRef(false);
   const [optionsChain, setOptionsChain] = useState<OptionsChain | null>(null);
   const lastKnownVixRef = useRef<number>(16.0);
+  const [portfolioGreeks, setPortfolioGreeks] = useState({
+    delta: 0,
+    gamma: 0,
+    theta: 0,
+    vega: 0,
+  });
 
   /* ── Load account + relations ── */
   useEffect(() => {
@@ -769,6 +783,113 @@ export function useAccount(accountId: string) {
     [account, optionsChain, getCalendarDate, fillPositions],
   );
 
+  const placeStrategy = useCallback(
+    async (type: StrategyType, legs: StrategyLegInput[]) => {
+      await withLock(mutationLock, async () => {
+        if (!account || account.status !== "active" || !optionsChain) return;
+
+        const validationError = validateStrategy(legs);
+        if (validationError) {
+          setOrderError(validationError);
+          return;
+        }
+
+        const analysis = analyzeStrategy(legs, optionsChain);
+
+        if (analysis.marginRequired > account.balance) {
+          setOrderError(
+            `Margin required ($${analysis.marginRequired.toFixed(0)}) exceeds available cash ($${account.balance.toFixed(0)}).`,
+          );
+          return;
+        }
+
+        setOrderError(null);
+
+        const strategyId = crypto.randomUUID();
+        const dateStr =
+          getCalendarDate() ?? new Date().toISOString().split("T")[0];
+
+        const filledLegs = legs.map((leg) => {
+          let entryPrice = 0;
+          let entryIv: number | null = null;
+
+          if (leg.instrument_type === "equity") {
+            entryPrice = currentPrice;
+          } else {
+            const opt =
+              optionsChain.calls.find(
+                (o) => Math.abs(o.strike - (leg.strike ?? 0)) < 0.01,
+              ) ||
+              optionsChain.puts.find(
+                (o) => Math.abs(o.strike - (leg.strike ?? 0)) < 0.01,
+              );
+            entryPrice =
+              leg.side === "long" ? (opt?.ask ?? 0) : (opt?.bid ?? 0);
+            entryIv = opt?.iv ?? null;
+          }
+
+          return {
+            instrument_type: leg.instrument_type,
+            side: leg.side,
+            quantity: leg.quantity,
+            entry_price: entryPrice,
+            strike: leg.strike ?? null,
+            entry_iv: entryIv,
+            strategy_id: strategyId,
+            expiration_date: leg.instrument_type === "equity" ? null : dateStr,
+          };
+        });
+
+        await fillPositions(filledLegs);
+      });
+    },
+    [account, optionsChain, currentPrice, getCalendarDate, fillPositions],
+  );
+
+  useEffect(() => {
+    if (!optionsChain) {
+      setPortfolioGreeks({ delta: 0, gamma: 0, theta: 0, vega: 0 });
+      return;
+    }
+
+    let delta = 0;
+    let gamma = 0;
+    let theta = 0;
+    let vega = 0;
+
+    for (const pos of positions) {
+      if (pos.instrument_type === "equity") {
+        delta += pos.quantity * (pos.side === "long" ? 1 : -1);
+        continue;
+      }
+
+      const leg =
+        optionsChain.calls.find(
+          (l) => Math.abs(l.strike - (pos.strike ?? 0)) < 0.01,
+        ) ||
+        optionsChain.puts.find(
+          (l) => Math.abs(l.strike - (pos.strike ?? 0)) < 0.01,
+        );
+
+      if (!leg) continue;
+
+      const mult = pos.quantity * 100;
+      const dir = pos.side === "long" ? 1 : -1;
+
+      delta += leg.delta * mult * dir;
+      gamma += leg.gamma * mult * dir;
+      theta += leg.theta * mult * dir;
+      vega += leg.vega * mult * dir;
+    }
+
+    setPortfolioGreeks({
+      delta: Math.round(delta * 100) / 100,
+      gamma: Math.round(gamma * 100) / 100,
+      theta: Math.round(theta * 100) / 100,
+      vega: Math.round(vega * 100) / 100,
+    });
+  }, [positions, optionsChain]);
+
   return {
     account,
     positions,
@@ -795,5 +916,7 @@ export function useAccount(accountId: string) {
     closeAllPositions, // Exposed for Phase 2
     placeOptionOrder,
     optionsChain,
+    portfolioGreeks,
+    placeStrategy,
   };
 }

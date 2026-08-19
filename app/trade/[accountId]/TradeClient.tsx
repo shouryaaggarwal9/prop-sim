@@ -10,6 +10,7 @@ import OrderPanel from "@/components/OrderPanel";
 import TradeLog from "@/components/TradeLog";
 import { createCheckoutSession } from "@/app/actions/payments";
 import { useEffect } from "react";
+import PortfolioGreeksPanel from "./PortfolioGreeksPanel";
 
 export default function TradeClient({ accountId }: { accountId: string }) {
   const {
@@ -36,6 +37,8 @@ export default function TradeClient({ accountId }: { accountId: string }) {
     needsPayment,
     optionsChain,
     placeOptionOrder,
+    portfolioGreeks,
+    placeStrategy,
   } = useAccount(accountId);
 
   const searchParams = useSearchParams();
@@ -158,7 +161,9 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             onUpdatePositionRisk={updatePositionRisk}
             onPlaceOptionOrder={placeOptionOrder}
             optionsChain={optionsChain}
+            onPlaceStrategy={placeStrategy}
           />
+          <PortfolioGreeksPanel greeks={portfolioGreeks} />
           {isReplayDone && (
             <p className="text-xs text-muted">
               This account has used all of its simulated price history — trading
