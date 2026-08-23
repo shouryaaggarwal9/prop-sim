@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import type {
   Account,
   OrderType,
@@ -8,163 +8,18 @@ import type {
   Position,
   Side,
 } from "@/lib/trading/types";
-import type { OptionsChain } from "@/lib/market/options";
+import { type OptionsChain, getLegPrice } from "@/lib/market/options";
+import { positionPnl } from "@/lib/trading/engine";
+
 import {
-  STRATEGY_CONFIGS,
-  analyzeStrategy,
   type StrategyType,
   type StrategyLegInput,
 } from "@/lib/market/strategies";
+import StrategyBuilder from "./StrategyBuilder";
 
 const ORDER_TYPES: OrderType[] = ["market", "limit", "stop"];
 
 type InstrumentTab = "equity" | "options" | "strategies";
-
-function StrategyBuilder({
-  chain,
-  onPlaceStrategy,
-  disabled,
-}: {
-  chain: OptionsChain;
-  onPlaceStrategy: (
-    type: StrategyType,
-    legs: StrategyLegInput[],
-  ) => Promise<void>;
-  disabled: boolean;
-}) {
-  const [selectedType, setSelectedType] =
-    useState<StrategyType>("bull_call_spread");
-  const [quantity, setQuantity] = useState(1);
-  const [busy, setBusy] = useState(false);
-
-  const config = STRATEGY_CONFIGS.find((c) => c.type === selectedType)!;
-
-  const [legs, setLegs] = useState<StrategyLegInput[]>(
-    config.defaultLegs(chain.atmStrike, 2.5),
-  );
-
-  // Recalculate defaults when strategy type changes
-  useMemo(() => {
-    setLegs(config.defaultLegs(chain.atmStrike, 2.5));
-  }, [selectedType, chain.atmStrike]);
-
-  const analysis = useMemo(() => analyzeStrategy(legs, chain), [legs, chain]);
-
-  async function handleSubmit() {
-    setBusy(true);
-    await onPlaceStrategy(
-      selectedType,
-      legs.map((l) => ({ ...l, quantity: l.quantity * quantity })),
-    );
-    setBusy(false);
-  }
-
-  function updateLeg(index: number, patch: Partial<StrategyLegInput>) {
-    setLegs((prev) =>
-      prev.map((l, i) => (i === index ? { ...l, ...patch } : l)),
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      <select
-        className="input w-full"
-        value={selectedType}
-        onChange={(e) => setSelectedType(e.target.value as StrategyType)}
-      >
-        {STRATEGY_CONFIGS.map((c) => (
-          <option key={c.type} value={c.type}>
-            {c.name}
-          </option>
-        ))}
-      </select>
-
-      <p className="text-xs text-muted">{config.description}</p>
-
-      <div>
-        <label className="mb-1 block text-xs text-muted">Contracts</label>
-        <input
-          type="number"
-          min={1}
-          className="input"
-          value={quantity}
-          onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))}
-        />
-      </div>
-
-      <div className="space-y-2">
-        {legs.map((leg, i) => (
-          <div
-            key={i}
-            className="flex items-center gap-2 rounded-lg border border-white/5 bg-white/2 p-2"
-          >
-            <span className="w-16 text-xs font-medium capitalize">
-              {leg.side}
-            </span>
-            <span className="w-12 text-xs text-muted">
-              {leg.instrument_type}
-            </span>
-            {leg.instrument_type !== "equity" && (
-              <input
-                type="number"
-                step={2.5}
-                className="input w-24 text-xs"
-                value={leg.strike ?? ""}
-                onChange={(e) =>
-                  updateLeg(i, { strike: Number(e.target.value) })
-                }
-              />
-            )}
-            <span className="ml-auto text-xs text-muted">×{leg.quantity}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="rounded-lg border border-white/5 bg-white/2 p-3 text-xs space-y-1">
-        <div className="flex justify-between">
-          <span className="text-muted">
-            Net {analysis.netDebit >= 0 ? "Debit" : "Credit"}
-          </span>
-          <span>${Math.abs(analysis.netDebit).toFixed(0)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted">Max Profit</span>
-          <span className="text-success">${analysis.maxProfit.toFixed(0)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted">Max Loss</span>
-          <span className="text-danger">${analysis.maxLoss.toFixed(0)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted">Margin</span>
-          <span>${analysis.marginRequired.toFixed(0)}</span>
-        </div>
-        {analysis.breakevens.length > 0 && (
-          <div className="flex justify-between">
-            <span className="text-muted">Breakeven</span>
-            <span>
-              {analysis.breakevens.map((b) => b.toFixed(2)).join(", ")}
-            </span>
-          </div>
-        )}
-        <div className="border-t border-white/5 pt-1 flex justify-between">
-          <span className="text-muted">Δ</span>
-          <span>{analysis.greeks.delta.toFixed(0)}</span>
-        </div>
-      </div>
-
-      <button
-        className={
-          config.category === "credit" ? "btn-sell w-full" : "btn-buy w-full"
-        }
-        disabled={disabled || busy}
-        onClick={handleSubmit}
-      >
-        {busy ? "Executing..." : `Place ${config.name}`}
-      </button>
-    </div>
-  );
-}
 
 export default function OrderPanel({
   account,
@@ -216,7 +71,6 @@ export default function OrderPanel({
 }) {
   const [tab, setTab] = useState<InstrumentTab>("equity");
   const [optionSubTab, setOptionSubTab] = useState<"call" | "put">("call");
-  const [quantity, setQuantity] = useState(10);
   const [orderType, setOrderType] = useState<OrderType>("market");
   const [triggerPrice, setTriggerPrice] = useState<number>(
     Math.round(currentPrice),
@@ -225,18 +79,21 @@ export default function OrderPanel({
   const [takeProfit, setTakeProfit] = useState<number | "">("");
   const [selectedStrike, setSelectedStrike] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [shareQty, setShareQty] = useState(10);
+  const [contractQty, setContractQty] = useState(1); //OP-2
   const disabled = account.status !== "active" || busy;
 
   const equityPos = positions.find((p) => p.instrument_type === "equity");
   const optionPositions = positions.filter(
-    (p) => p.instrument_type === "call" || p.instrument_type === "put",
+    (p): p is Position & { instrument_type: "call" | "put" } =>
+      p.instrument_type === "call" || p.instrument_type === "put",
   );
 
   async function handlePlace(side: Side) {
     setBusy(true);
     await onPlaceOrder(
       side,
-      quantity,
+      shareQty,
       orderType,
       orderType === "market" ? undefined : triggerPrice,
       stopLoss === "" ? undefined : stopLoss,
@@ -248,7 +105,7 @@ export default function OrderPanel({
   async function handleOptionPlace(type: "call" | "put") {
     if (!selectedStrike) return;
     setBusy(true);
-    await onPlaceOptionOrder(type, selectedStrike, quantity);
+    await onPlaceOptionOrder(type, selectedStrike, contractQty);
     setBusy(false);
   }
 
@@ -275,6 +132,8 @@ export default function OrderPanel({
 
   /* ── Open positions view ── */
   if (positions.length > 0) {
+    // just above `return (`, inside the component
+    const eqPnl = positionPnl(equityPos!, currentPrice);
     return (
       <div className="card space-y-3 p-4">
         <h3 className="text-sm font-medium">Positions</h3>
@@ -287,21 +146,8 @@ export default function OrderPanel({
             </p>
             <p>
               Unrealized:{" "}
-              <span
-                className={
-                  (currentPrice - equityPos.entry_price) *
-                    (equityPos.side === "long" ? 1 : -1) *
-                    equityPos.quantity >=
-                  0
-                    ? "text-success"
-                    : "text-danger"
-                }
-              >
-                {(
-                  (currentPrice - equityPos.entry_price) *
-                  (equityPos.side === "long" ? 1 : -1) *
-                  equityPos.quantity
-                ).toFixed(2)}
+              <span className={eqPnl >= 0 ? "text-success" : "text-danger"}>
+                {eqPnl.toFixed(2)}
               </span>
             </p>
             {equityPos.stop_loss_price != null && (
@@ -319,15 +165,10 @@ export default function OrderPanel({
 
         {optionPositions.map((pos) => {
           const leg = optionsChain
-            ? optionsChain.calls.find(
-                (l) => Math.abs(l.strike - (pos.strike ?? 0)) < 0.01,
-              ) ||
-              optionsChain.puts.find(
-                (l) => Math.abs(l.strike - (pos.strike ?? 0)) < 0.01,
-              )
+            ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
             : null;
           const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
-          const unrealized = (mark - pos.entry_price) * pos.quantity * 100;
+          const unrealized = positionPnl(pos, mark); // ← direction-correct now //OP-1
 
           return (
             <div key={pos.id} className="space-y-1 text-sm">
@@ -416,6 +257,16 @@ export default function OrderPanel({
           {pendingOrder.order_type} {pendingOrder.side} {pendingOrder.quantity}{" "}
           @ {pendingOrder.trigger_price.toFixed(2)}
         </p>
+        {pendingOrder.stop_loss_price != null && (
+          <p className="text-xs text-muted">
+            Stop loss: {pendingOrder.stop_loss_price.toFixed(2)}
+          </p>
+        )}
+        {pendingOrder.take_profit_price != null && (
+          <p className="text-xs text-muted">
+            Take profit: {pendingOrder.take_profit_price.toFixed(2)}
+          </p>
+        )}
         <button
           className="btn-secondary w-full"
           disabled={busy}
@@ -475,7 +326,7 @@ export default function OrderPanel({
               <button
                 type="button"
                 className="text-xs text-accent hover:underline"
-                onClick={() => setQuantity(Math.max(1, maxQuantity))}
+                onClick={() => setShareQty(Math.max(1, maxQuantity))}
               >
                 Max: {maxQuantity}
               </button>
@@ -484,8 +335,8 @@ export default function OrderPanel({
               type="number"
               min={1}
               className="input"
-              value={quantity}
-              onChange={(e) => setQuantity(Math.max(1, Number(e.target.value)))}
+              value={shareQty}
+              onChange={(e) => setShareQty(Math.max(1, Number(e.target.value)))}
             />
           </div>
 
@@ -593,9 +444,9 @@ export default function OrderPanel({
                   type="number"
                   min={1}
                   className="input"
-                  value={quantity}
+                  value={contractQty}
                   onChange={(e) =>
-                    setQuantity(Math.max(1, Number(e.target.value)))
+                    setContractQty(Math.max(1, Number(e.target.value)))
                   }
                 />
               </div>
@@ -643,14 +494,14 @@ export default function OrderPanel({
               {selectedStrike && (
                 <p className="text-xs text-muted">
                   Selected: {optionSubTab} @ {selectedStrike.toFixed(2)} ×{" "}
-                  {quantity} = $
+                  {contractQty} = $
                   {(() => {
                     const leg = (
                       optionSubTab === "call"
                         ? optionsChain.calls
                         : optionsChain.puts
                     ).find((l) => l.strike === selectedStrike);
-                    return leg ? (leg.ask * quantity * 100).toFixed(0) : "0";
+                    return leg ? (leg.ask * contractQty * 100).toFixed(0) : "0";
                   })()}{" "}
                   premium (cash)
                 </p>

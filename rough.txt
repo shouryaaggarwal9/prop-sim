@@ -1,3 +1,443 @@
+ and up top: const isValid = legs.length > 0 && legs.every((l) => legIsResolvable(l, chain)); — replacing missingLegs with legs.filter((l) => !legIsResolvable(l, chain)).length
+
+
+async function handleSubmit() {
+  if (!isValid) return;
+  setBusy(true);
+  await onPlaceStrategy(selectedType, scaledLegs); // ← one line replaces the .map()
+  setBusy(false);
+}
+
+const strategyId = crypto.randomUUID();
+const dateStr =
+  getCalendarDate() ?? new Date().toISOString().split("T")[0];
+
+// Phase A — resolve EVERY leg before touching the database.
+const resolvedLegs: Array<{
+  instrument_type: InstrumentType;
+  side: Side;
+  quantity: number;
+  entry_price: number;
+  strike: number | null;
+  entry_iv: number | null;
+  strategy_id: string;
+  expiration_date: string | null;
+}> = [];
+
+for (const leg of legs) {
+  if (leg.instrument_type === "equity") {
+    resolvedLegs.push({
+      instrument_type: leg.instrument_type,
+      side: leg.side,
+      quantity: leg.quantity,
+      entry_price: currentPrice,
+      strike: null,
+      entry_iv: null,
+      strategy_id: strategyId,
+      expiration_date: null,
+    });
+    continue;
+  }
+
+  let opt: OptionLeg;
+  try {
+    opt = resolveLeg(optionsChain, leg.instrument_type, leg.strike ?? 0);
+  } catch {
+    setOrderError(
+      `${leg.instrument_type} @ ${leg.strike} is no longer in the current chain. Reopen the builder and resubmit.`,
+    );
+    return; // ← legal & total: aborts the ENTIRE strategy, not one leg
+  }
+
+  resolvedLegs.push({
+    instrument_type: leg.instrument_type,
+    side: leg.side,
+    quantity: leg.quantity,
+    entry_price: leg.side === "long" ? opt.ask : opt.bid,
+    strike: leg.strike ?? null,
+    entry_iv: opt.iv,
+    strategy_id: strategyId,
+    expiration_date: dateStr,
+  });
+}
+
+// Phase B — all legs resolved cleanly; only now do we persist.
+await fillPositions(resolvedLegs);
+
+
+//iske upar
+
+const [shareQty, setShareQty] = useState(10); and const [contractQty, setContractQty] = useState(1); 
+
+const found =
+  leg.instrument_type === "call"
+    ? chain.calls.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01)
+    : chain.puts.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01);
+
+import { getLegPrice } from "@/lib/market/options";
+import { positionPnl } from "@/lib/trading/engine";
+// ...
+const leg = optionsChain
+  ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
+  : null;
+const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
+const unrealized = positionPnl(pos, mark); // ← direction-correct now
+
+else {
+  let opt: OptionLeg;
+  try {
+    opt = resolveLeg(optionsChain, leg.instrument_type, leg.strike ?? 0);
+  } catch {
+    setOrderError(
+      `${leg.instrument_type} @ ${leg.strike} is no longer in the current chain. Reopen the builder and resubmit.`,
+    );
+    return;
+  }
+  entryPrice = leg.side === "long" ? opt.ask : opt.bid;
+  entryIv = opt.iv;
+}
+
+if (!insErr && data) setPositions((prev) => mergeById(prev, data as Position[])); // ← FIX C4
+
+legs: Array<{
+  instrument_type: InstrumentType;
+  side: Side;
+  quantity: number;
+  entry_price: number;
+  strike?: number;
+  entry_iv?: number;
+  strategy_id?: string;
+  expiration_date?: string;
+  stop_loss_price?: number | null;   // ← new
+  take_profit_price?: number | null; // ← new
+}>,
+
+
+const pnl = positionPnl(pos, exitPrice);
+// (delete the old equity/options branching entirely)
+
+
+
+for (const pos of positions) {
+  if (pos.instrument_type === "equity") {
+    total += positionPnl(pos, currentPrice);
+  } else {
+    const leg = optionsChain
+      ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
+      : null;
+    const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
+    total += positionPnl(pos, mark); // ← direction now honored for shorts
+  }
+}
+
+
+
+
+
+// Inside generateOptionsChain loop:
+const callSpread = computeSpread(underlyingPrice, strike, callGreeks.price, hoursToClose);
+const putSpread = computeSpread(underlyingPrice, strike, putGreeks.price, hoursToClose);
+
+// Floor bid at 0 and ensure minimum 0.01 tick
+const callBid = Math.max(0, Math.round((callGreeks.price - callSpread / 2) * 100) / 100);
+const callAsk = Math.max(callBid + 0.01, Math.round((callGreeks.price + callSpread / 2) * 100) / 100);
+
+const putBid = Math.max(0, Math.round((putGreeks.price - putSpread / 2) * 100) / 100);
+const putAsk = Math.max(putBid + 0.01, Math.round((putGreeks.price + putSpread / 2) * 100) / 100);
+
+
+function computeIV(
+  underlyingPrice: number,
+  strike: number,
+  vix: number,
+  hoursToClose: number
+): number {
+  const moneyness = Math.log(strike / underlyingPrice);
+  
+  // Scale IV higher as expiry approaches (intraday vol ramp)
+  const timeFactor = Math.max(1.0, Math.sqrt(6.5 / Math.max(0.25, hoursToClose)));
+  const baseIV = vix * ODT_VOL_MULTIPLIER * timeFactor;
+
+  let iv = baseIV + SKEW * moneyness + SMILE * Math.pow(moneyness, 2);
+  const pctDist = Math.abs(strike - underlyingPrice) / underlyingPrice;
+  iv *= 1 + 2.5 * pctDist;
+
+  return Math.max(0.15, Math.min(iv / 100, 3.5)); // Allow realistic 0DTE IV caps up to 350%
+}
+
+
+const TRADING_HOURS_PER_DAY = 6.5;
+const TRADING_DAYS_PER_YEAR = 252;
+const ANNUAL_TRADING_HOURS = TRADING_HOURS_PER_DAY * TRADING_DAYS_PER_YEAR; // 1638 hours
+
+export function generateOptionsChain(
+  underlyingPrice: number,
+  vix: number,
+  hoursToClose: number,
+): OptionsChain {
+  // Use trading year time
+  const T = hoursToClose / ANNUAL_TRADING_HOURS;
+  // ...
+}
+
+
+
+const ODT_VOL_MULTIPLIER = 2.0;  // Tune: 1.5 (calm) to 2.5 (volatile)
+const SKEW = -6.0;               // Steeper put skew
+const SMILE = 45.0;              // Extreme 0DTE smile
+
+function computeIV(
+  underlyingPrice: number,
+  strike: number,
+  vix: number,
+): number {
+  const moneyness = Math.log(strike / underlyingPrice);
+  const baseIV = vix * ODT_VOL_MULTIPLIER;
+  
+  // 0DTE smile: wings expand dramatically
+  let iv = baseIV + SKEW * moneyness + SMILE * moneyness * moneyness;
+  
+  // Additional wing expansion for far OTM lottery tickets
+  const pctDist = Math.abs(strike - underlyingPrice) / underlyingPrice;
+  iv *= (1 + 1.5 * pctDist);
+  
+  return Math.max(0.05, Math.min(iv / 100, 1.50)); // 5% to 150% cap
+}
+
+
+
+export function generateOptionsChain(
+  underlyingPrice: number,
+  vix: number,
+  hoursToClose: number,
+): OptionsChain {
+  const T = hoursToClose / 24 / 365;
+  const strikes = generateStrikes(underlyingPrice);
+  const atmStrike =
+    Math.round(underlyingPrice / STRIKE_INCREMENT) * STRIKE_INCREMENT;
+
+  // 0DTE vol is much higher than VIX due to gamma risk
+  const ODT_VOL_MULTIPLIER = 2.5;
+  const odtVix = vix * ODT_VOL_MULTIPLIER;
+
+  // ... rest unchanged, but pass odtVix/100 as sigma to blackScholes
+
+
+
+  // DEBUG: Show leg resolution
+  interface LegDebug {
+    side: string;
+    instrument_type: string;
+    strike?: number;
+    quantity: number;
+    found: boolean;
+    bid?: number;
+    ask?: number;
+    price?: number;
+  }
+
+  const legDebug: LegDebug[] = legs.map((leg) => {
+    if (leg.instrument_type === "equity") {
+      return {
+        ...leg,
+        found: true,
+        price: chain.underlyingPrice,
+      };
+    }
+    const found =
+      chain.calls.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01) ||
+      chain.puts.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01);
+    return {
+      ...leg,
+      found: !!found,
+      strikeInChain: found?.strike,
+      bid: found?.bid,
+      ask: found?.ask,
+      price: found?.price,
+    };
+  });
+
+
+"use client";
+
+import { useState, useEffect, useMemo } from "react";
+import type { OptionsChain } from "@/lib/market/options";
+import {
+  STRATEGY_CONFIGS,
+  analyzeStrategy,
+  type StrategyType,
+  type StrategyLegInput,
+} from "@/lib/market/strategies";
+
+function StrategyBuilder({
+  chain,
+  onPlaceStrategy,
+  disabled,
+}: {
+  chain: OptionsChain;
+  onPlaceStrategy: (type: StrategyType, legs: StrategyLegInput[]) => Promise<void>;
+  disabled: boolean;
+}) {
+  const [selectedType, setSelectedType] = useState<StrategyType>("bull_call_spread");
+  const [contracts, setContracts] = useState(1);
+  const [legs, setLegs] = useState<StrategyLegInput[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const config = STRATEGY_CONFIGS.find((c) => c.type === selectedType)!;
+
+  // FIX #1: useEffect (not useMemo) for side-effect state reset
+  useEffect(() => {
+    const defaults = config.defaultLegs(chain.atmStrike, 2.5);
+    setLegs(defaults);
+    // Reset contracts to 1 on strategy change to avoid confusion
+    setContracts(1);
+  }, [selectedType, chain.atmStrike, config]);
+
+  // Compute analysis with current legs + chain
+  const analysis = useMemo(() => analyzeStrategy(legs, chain), [legs, chain]);
+
+  // Check if all legs have valid prices in the current chain
+  const missingLegs = legs.filter((leg) => {
+    if (leg.instrument_type === "equity") return false;
+    const found =
+      chain.calls.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01) ||
+      chain.puts.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01);
+    return !found;
+  });
+
+  const isValid = missingLegs.length === 0 && legs.length > 0;
+
+  async function handleSubmit() {
+    if (!isValid) return;
+    setBusy(true);
+    await onPlaceStrategy(
+      selectedType,
+      legs.map((l) => ({ ...l, quantity: l.quantity * contracts })),
+    );
+    setBusy(false);
+  }
+
+  function updateLeg(index: number, patch: Partial<StrategyLegInput>) {
+    setLegs((prev) => prev.map((l, i) => (i === index ? { ...l, ...patch } : l)));
+  }
+
+  // FIX #2: Filter NaN breakevens
+  const cleanBreakevens = analysis.breakevens.filter((b) => !isNaN(b) && isFinite(b));
+
+  return (
+    <div className="space-y-3">
+      <select
+        className="input w-full"
+        value={selectedType}
+        onChange={(e) => setSelectedType(e.target.value as StrategyType)}
+      >
+        {STRATEGY_CONFIGS.map((c) => (
+          <option key={c.type} value={c.type}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+
+      <p className="text-xs text-muted">{config.description}</p>
+
+      <div>
+        <label className="mb-1 block text-xs text-muted">Contracts</label>
+        <input
+          type="number"
+          min={1}
+          className="input"
+          value={contracts}
+          onChange={(e) => setContracts(Math.max(1, Number(e.target.value)))}
+        />
+      </div>
+
+      <div className="space-y-2">
+        {legs.map((leg, i) => {
+          const isMissing =
+            leg.instrument_type !== "equity" &&
+            !(
+              chain.calls.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01) ||
+              chain.puts.find((l) => Math.abs(l.strike - (leg.strike ?? 0)) < 0.01)
+            );
+
+          return (
+            <div
+              key={i}
+              className={`flex items-center gap-2 rounded-lg border p-2 ${
+                isMissing
+                  ? "border-danger/30 bg-danger/5"
+                  : "border-white/5 bg-white/[0.02]"
+              }`}
+            >
+              <span className="w-16 text-xs font-medium capitalize">{leg.side}</span>
+              <span className="w-12 text-xs text-muted">{leg.instrument_type}</span>
+              {leg.instrument_type !== "equity" && (
+                <input
+                  type="number"
+                  step={2.5}
+                  className={`input w-24 text-xs ${isMissing ? "border-danger" : ""}`}
+                  value={leg.strike ?? ""}
+                  onChange={(e) => updateLeg(i, { strike: Number(e.target.value) })}
+                />
+              )}
+              <span className="ml-auto text-xs text-muted">×{leg.quantity}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {missingLegs.length > 0 && (
+        <p className="text-xs text-danger">
+          Strike(s) not found in current chain. Adjust to valid $2.50 increments.
+        </p>
+      )}
+
+      <div className="rounded-lg border border-white/5 bg-white/[0.02] p-3 text-xs space-y-1">
+        <div className="flex justify-between">
+          <span className="text-muted">
+            Net {analysis.netDebit >= 0 ? "Debit" : "Credit"}
+          </span>
+          <span>${Math.abs(analysis.netDebit).toFixed(0)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted">Max Profit</span>
+          <span className="text-success">${analysis.maxProfit.toFixed(0)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted">Max Loss</span>
+          <span className="text-danger">${analysis.maxLoss.toFixed(0)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted">Margin</span>
+          <span>${analysis.marginRequired.toFixed(0)}</span>
+        </div>
+        {cleanBreakevens.length > 0 && (
+          <div className="flex justify-between">
+            <span className="text-muted">Breakeven</span>
+            <span>{cleanBreakevens.map((b) => b.toFixed(2)).join(", ")}</span>
+          </div>
+        )}
+        <div className="border-t border-white/5 pt-1 flex justify-between">
+          <span className="text-muted">Δ</span>
+          <span>{analysis.greeks.delta.toFixed(0)}</span>
+        </div>
+      </div>
+
+      <button
+        className={config.category === "credit" ? "btn-sell w-full" : "btn-buy w-full"}
+        disabled={disabled || busy || !isValid}
+        onClick={handleSubmit}
+      >
+        {busy ? "Executing..." : `Place ${config.name}`}
+      </button>
+    </div>
+  );
+}
+
+export default StrategyBuilder;
+
+
+
 "use client";
 
 import { useState, useMemo } from "react";

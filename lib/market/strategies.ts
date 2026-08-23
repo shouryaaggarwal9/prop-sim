@@ -1,4 +1,5 @@
-import type { OptionsChain } from "./options";
+// import type { OptionsChain, OptionLeg } from "./options";
+import { getLegPrice, type OptionsChain, type OptionLeg } from "./options";
 
 export type StrategyType =
   | "bull_call_spread"
@@ -146,17 +147,8 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
   },
 ];
 
-function getLegPrice(
-  chain: OptionsChain,
-  type: "call" | "put",
-  strike: number,
-) {
-  const legs = type === "call" ? chain.calls : chain.puts;
-  return legs.find((l) => Math.abs(l.strike - strike) < 0.01);
-}
-
 export interface StrategyAnalysis {
-  netDebit: number; // positive = you pay, negative = you receive
+  netDebit: number; // positive = debit paid, negative = credit received
   maxProfit: number;
   maxLoss: number;
   breakevens: number[];
@@ -179,6 +171,12 @@ export function analyzeStrategy(
   let theta = 0;
   let vega = 0;
 
+  // Track all key strike boundaries for exact expiration payoff evaluation
+  const keyPrices = new Set<number>([
+    chain.underlyingPrice * 0.85,
+    chain.underlyingPrice * 1.15,
+  ]);
+
   for (const leg of legs) {
     if (leg.instrument_type === "equity") {
       const cost = chain.underlyingPrice * leg.quantity;
@@ -195,17 +193,20 @@ export function analyzeStrategy(
     const opt = getLegPrice(chain, leg.instrument_type, leg.strike ?? 0);
     if (!opt) continue;
 
-    const price = leg.side === "long" ? opt.ask : opt.bid;
+    if (leg.strike) keyPrices.add(leg.strike);
+
+    // Long pays Ask, Short receives Bid
+    const executionPrice = leg.side === "long" ? opt.ask : opt.bid;
     const mult = leg.quantity * 100;
 
     if (leg.side === "long") {
-      netDebit += price * mult;
+      netDebit += executionPrice * mult;
       delta += opt.delta * mult;
       gamma += opt.gamma * mult;
       theta += opt.theta * mult;
       vega += opt.vega * mult;
     } else {
-      netDebit -= price * mult;
+      netDebit -= executionPrice * mult;
       delta -= opt.delta * mult;
       gamma -= opt.gamma * mult;
       theta -= opt.theta * mult;
@@ -213,90 +214,102 @@ export function analyzeStrategy(
     }
   }
 
-  // Margin calculation
+  netDebit = Math.round(netDebit * 100) / 100;
+
+  // Margin Calculations
   let marginRequired = 0;
   const isCredit = netDebit < 0;
-
-  // Detect spread width for defined-risk strategies
   const calls = legs.filter((l) => l.instrument_type === "call");
   const puts = legs.filter((l) => l.instrument_type === "put");
 
   if (legs.some((l) => l.instrument_type === "equity")) {
-    // Hedged strategies: margin = equity cost + any net debit
-    const equityLeg = legs.find((l) => l.instrument_type === "equity");
-    const eqCost = (equityLeg?.quantity ?? 0) * chain.underlyingPrice;
-    marginRequired = eqCost + Math.max(0, netDebit);
+    // netDebit already includes the equity cost from the loop above
+    marginRequired = Math.max(0, netDebit);
   } else if (calls.length === 2 && puts.length === 2) {
-    // Iron condor: width × 100 - net credit
+    // Iron Condor: Max risk is the widest wing * 100 * quantity, minus the net credit received
     const callWidth = Math.abs((calls[0].strike ?? 0) - (calls[1].strike ?? 0));
     const putWidth = Math.abs((puts[0].strike ?? 0) - (puts[1].strike ?? 0));
-    const width = Math.min(callWidth, putWidth);
-    marginRequired = width * 100 - Math.abs(netDebit);
+    const maxWingWidth = Math.max(callWidth, putWidth);
+    const qty = Math.max(calls[0].quantity, puts[0].quantity); // Use the largest leg quantity
+
+    marginRequired = maxWingWidth * 100 * qty - Math.abs(netDebit);
   } else if (calls.length === 2 || puts.length === 2) {
-    // Vertical spread: width × 100 - net credit, or net debit for debit spreads
+    // Spreads: Risk is width * 100 * quantity minus credit (if short), or just net debit (if long)
     const opts = calls.length === 2 ? calls : puts;
     const width = Math.abs((opts[0].strike ?? 0) - (opts[1].strike ?? 0));
-    marginRequired = isCredit ? width * 100 - Math.abs(netDebit) : netDebit;
+    const qty = opts[0].quantity;
+
+    marginRequired = isCredit
+      ? width * 100 * qty - Math.abs(netDebit)
+      : netDebit;
   } else {
-    // Single leg or undefined: full cash
-    marginRequired = Math.abs(netDebit);
+    // Naked Long Options: Margin is strictly the premium paid
+    marginRequired = Math.max(0, netDebit);
   }
 
-  marginRequired = Math.max(marginRequired, 0);
+  marginRequired = Math.max(0, Math.round(marginRequired * 100) / 100);
 
-  // Max profit / loss estimation (simplified for 0DTE)
-  // For multi-strike strategies, we compute at key test points
-  const testPrices = [
-    chain.underlyingPrice * 0.9,
-    chain.underlyingPrice * 0.95,
-    chain.underlyingPrice,
-    chain.underlyingPrice * 1.05,
-    chain.underlyingPrice * 1.1,
-  ];
+  // Exact Expiration Payoff Curve Across All Strikes
+  const sortedPrices = Array.from(keyPrices).sort((a, b) => a - b);
+  const testPrices: number[] = [];
 
-  const pnls = testPrices.map((s) => {
-    let pnl = 0;
-    for (const leg of legs) {
-      if (leg.instrument_type === "equity") {
-        const dir = leg.side === "long" ? 1 : -1;
-        pnl += (s - chain.underlyingPrice) * leg.quantity * dir;
-        continue;
-      }
-      const intrinsic =
-        leg.instrument_type === "call"
-          ? Math.max(0, s - (leg.strike ?? 0))
-          : Math.max(0, (leg.strike ?? 0) - s);
-      const entry = getLegPrice(chain, leg.instrument_type, leg.strike ?? 0);
-      const entryPrice =
-        leg.side === "long" ? (entry?.ask ?? 0) : (entry?.bid ?? 0);
-      const dir = leg.side === "long" ? 1 : -1;
-      pnl += (intrinsic - entryPrice) * leg.quantity * 100 * dir;
+  for (let i = 0; i < sortedPrices.length; i++) {
+    testPrices.push(sortedPrices[i]);
+    if (i < sortedPrices.length - 1) {
+      testPrices.push((sortedPrices[i] + sortedPrices[i + 1]) / 2);
     }
-    return pnl;
+  }
+
+  const pnls = testPrices.map((spot) => {
+    let terminalValue = 0;
+    for (const leg of legs) {
+      const mult = leg.quantity * (leg.instrument_type === "equity" ? 1 : 100);
+      const dir = leg.side === "long" ? 1 : -1;
+
+      if (leg.instrument_type === "equity") {
+        terminalValue += spot * mult * dir;
+      } else if (leg.instrument_type === "call") {
+        terminalValue += Math.max(0, spot - (leg.strike ?? 0)) * mult * dir;
+      } else {
+        terminalValue += Math.max(0, (leg.strike ?? 0) - spot) * mult * dir;
+      }
+    }
+    // Net P&L = Terminal Value - Net Debit Paid
+    return terminalValue - netDebit;
   });
 
-  const maxProfit = Math.max(...pnls);
-  const maxLoss = Math.min(...pnls);
+  const maxProfit = Math.round(Math.max(...pnls) * 100) / 100;
+  const maxLoss = Math.round(Math.abs(Math.min(...pnls)) * 100) / 100;
 
-  // Breakevens: interpolate where P&L crosses zero
+  // Breakeven Point Detection
   const breakevens: number[] = [];
   for (let i = 0; i < pnls.length - 1; i++) {
     if (
       (pnls[i] <= 0 && pnls[i + 1] >= 0) ||
       (pnls[i] >= 0 && pnls[i + 1] <= 0)
     ) {
-      const t = pnls[i] / (pnls[i] - pnls[i + 1]);
-      breakevens.push(testPrices[i] + t * (testPrices[i + 1] - testPrices[i]));
+      const denom = pnls[i + 1] - pnls[i];
+      if (denom !== 0) {
+        const t = -pnls[i] / denom;
+        breakevens.push(
+          testPrices[i] + t * (testPrices[i + 1] - testPrices[i]),
+        );
+      }
     }
   }
 
   return {
     netDebit,
     maxProfit,
-    maxLoss: Math.abs(maxLoss),
-    breakevens,
+    maxLoss,
+    breakevens: breakevens.map((b) => Math.round(b * 100) / 100),
     marginRequired,
-    greeks: { delta, gamma, theta, vega },
+    greeks: {
+      delta: Math.round(delta * 100) / 100,
+      gamma: Math.round(gamma * 10000) / 10000,
+      theta: Math.round(theta * 100) / 100,
+      vega: Math.round(vega * 100) / 100,
+    },
   };
 }
 
@@ -310,7 +323,6 @@ export function validateStrategy(legs: StrategyLegInput[]): string | null {
     }
   }
 
-  // Check for duplicate strikes in same type/side (usually a mistake)
   const keys = new Set<string>();
   for (const leg of legs) {
     const key = `${leg.instrument_type}-${leg.side}-${leg.strike}`;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import { positionPnl, resolveLeg, validateTrigger, mergeById } from "./engine";
 import { getEpoch } from "@/lib/market/epochs";
 import { useMarketReplay } from "@/lib/market/useMarketReplay";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
@@ -17,6 +18,7 @@ import type {
 import {
   generateOptionsChain,
   updateChainPrices,
+  type OptionLeg,
   getLegPrice,
   getIntrinsicValue,
   type OptionsChain,
@@ -25,13 +27,11 @@ import {
 import {
   analyzeStrategy,
   validateStrategy,
-  STRATEGY_CONFIGS,
   type StrategyType,
   type StrategyLegInput,
 } from "@/lib/market/strategies";
 
 const TICK_MS = 200;
-const SUBTICKS_PER_BAR = 5;
 const BARS_PER_SIMULATED_DAY = 78;
 
 async function withLock(
@@ -163,19 +163,15 @@ export function useAccount(accountId: string) {
 
     for (const pos of positions) {
       if (pos.instrument_type === "equity") {
-        const dir = pos.side === "long" ? 1 : -1;
-        total += (currentPrice - pos.entry_price) * pos.quantity * dir;
-      } else if (
-        pos.instrument_type === "call" ||
-        pos.instrument_type === "put"
-      ) {
+        total += positionPnl(pos, currentPrice);
+      } else {
         const leg = optionsChain
           ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
           : null;
         const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
-        total += (mark - pos.entry_price) * pos.quantity * 100;
+        total += positionPnl(pos, mark); // ← direction now honored for shorts
       }
-    }
+    } //UA-2
     return total;
   }, [account, positions, currentPrice, optionsChain]);
 
@@ -227,10 +223,12 @@ export function useAccount(accountId: string) {
         side: Side;
         quantity: number;
         entry_price: number;
-        strike?: number;
-        entry_iv?: number;
-        strategy_id?: string;
-        expiration_date?: string;
+        strike?: number | null;
+        entry_iv?: number | null;
+        strategy_id?: string | null;
+        expiration_date?: string | null;
+        stop_loss_price?: number | null;
+        take_profit_price?: number | null;
       }>,
     ) => {
       if (!account || legs.length === 0) return;
@@ -245,6 +243,8 @@ export function useAccount(accountId: string) {
         entry_iv: leg.entry_iv ?? null,
         strategy_id: leg.strategy_id ?? null,
         expiration_date: leg.expiration_date ?? null,
+        stop_loss_price: leg.stop_loss_price ?? null,
+        take_profit_price: leg.take_profit_price ?? null, //UA-4
       }));
 
       const { data, error: insErr } = await supabase
@@ -252,7 +252,8 @@ export function useAccount(accountId: string) {
         .insert(inserts)
         .select();
 
-      if (!insErr && data) setPositions(data as Position[]);
+      if (!insErr && data)
+        setPositions((prev) => mergeById(prev, data as Position[])); // ← FIX C4 //UA-4
     },
     [account, supabase],
   );
@@ -264,15 +265,7 @@ export function useAccount(accountId: string) {
       exitPrice: number,
       reason: string,
     ): Promise<{ pnl: number; tradeRow: Trade | null }> => {
-      let pnl = 0;
-
-      if (pos.instrument_type === "equity") {
-        const dir = pos.side === "long" ? 1 : -1;
-        pnl = (exitPrice - pos.entry_price) * pos.quantity * dir;
-      } else {
-        // Options: exitPrice is intrinsic at day end, or mark during day
-        pnl = (exitPrice - pos.entry_price) * pos.quantity * 100;
-      }
+      const pnl = positionPnl(pos, exitPrice); //UA-3
 
       const { data: tradeRow } = await supabase
         .from("trades")
@@ -300,6 +293,33 @@ export function useAccount(accountId: string) {
     },
     [supabase],
   );
+
+  /* ── Auto-close on stop-loss / take-profit hit ── */
+  useEffect(() => {
+    if (!account || account.status !== "active") return;
+    const equityPos = positions.find((p) => p.instrument_type === "equity");
+    if (!equityPos) return;
+
+    const sl = equityPos.stop_loss_price;
+    const tp = equityPos.take_profit_price;
+    const long = equityPos.side === "long";
+
+    const hitSL =
+      sl != null && (long ? currentPrice <= sl : currentPrice >= sl);
+    const hitTP =
+      tp != null && (long ? currentPrice >= tp : currentPrice <= tp);
+    if (!hitSL && !hitTP) return;
+
+    const exitPrice = hitSL ? sl! : tp!;
+    const reason = hitSL ? "sl" : "tp"; // both allowed by the DB CHECK constraint
+
+    withLock(mutationLock, async () => {
+      const { pnl } = await closePositionCore(equityPos, exitPrice, reason);
+      setPositions((prev) => prev.filter((p) => p.id !== equityPos.id));
+      // if (account) await persistAccount({ balance: account.balance + pnl });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPrice]); //UA-7
 
   /** Closes ALL positions atomically. Returns total PnL. */
   const closeAllPositions = useCallback(
@@ -426,7 +446,7 @@ export function useAccount(accountId: string) {
   /* ── Persist replay progress ── */
   const lastPersistedBarIndexRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!account) return;
+    if (!account || account.status !== "active") return; //UA-9
     if (lastPersistedBarIndexRef.current === replay.barIndex) return;
     lastPersistedBarIndexRef.current = replay.barIndex;
     persistAccount({ replay_bar_index: replay.barIndex });
@@ -570,6 +590,8 @@ export function useAccount(accountId: string) {
             side,
             quantity: pendingOrder.quantity,
             entry_price: trigger_price,
+            stop_loss_price: stop_loss_price ?? null, // destructured at top of effect ✓
+            take_profit_price: take_profit_price ?? null,
           },
         ]);
       });
@@ -577,7 +599,7 @@ export function useAccount(accountId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPrice]);
 
-  /* ── Single-leg equity order (backward compat) ── */
+  /* ── Single-leg equity order ── */
   const placeOrder = useCallback(
     async (
       side: Side,
@@ -608,6 +630,30 @@ export function useAccount(accountId: string) {
           );
           return;
         }
+
+        // Validate risk prices against the FILL price (current for market,
+        // trigger for resting orders) — same rules as updatePositionRisk.
+        if (stopLoss != null) {
+          if (side === "long" && stopLoss >= referencePrice) {
+            setOrderError("Stop-loss must be below fill price for longs.");
+            return;
+          }
+          if (side === "short" && stopLoss <= referencePrice) {
+            setOrderError("Stop-loss must be above fill price for shorts.");
+            return;
+          }
+        }
+        if (takeProfit != null) {
+          if (side === "long" && takeProfit <= referencePrice) {
+            setOrderError("Take-profit must be above fill price for longs.");
+            return;
+          }
+          if (side === "short" && takeProfit >= referencePrice) {
+            setOrderError("Take-profit must be below fill price for shorts.");
+            return;
+          }
+        }
+
         setOrderError(null);
 
         if (orderType === "market") {
@@ -615,10 +661,24 @@ export function useAccount(accountId: string) {
             {
               instrument_type: "equity",
               side,
-              quantity,
-              entry_price: currentPrice,
+              quantity, // ← local parameter (was: pendingOrder.quantity)
+              entry_price: currentPrice, // ← market fills AT market (was: trigger_price)
+              stop_loss_price: stopLoss ?? null,
+              take_profit_price: takeProfit ?? null,
             },
           ]);
+          return;
+        }
+
+        // Past this point TS knows orderType is "limit" | "stop" — UA-5 lives HERE.
+        const triggerError = validateTrigger(
+          orderType,
+          side,
+          triggerPrice!,
+          currentPrice,
+        );
+        if (triggerError) {
+          setOrderError(triggerError);
           return;
         }
 
@@ -719,21 +779,6 @@ export function useAccount(accountId: string) {
     [positions, currentPrice, supabase],
   );
 
-  /* ── Auto-close on stop-loss / take-profit hit ── */
-  useEffect(() => {
-    if (!account || positions.length === 0 || account.status !== "active")
-      return;
-
-    const equityPos = positions.find((p) => p.instrument_type === "equity");
-    if (!equityPos) return;
-
-    // Note: SL/TP fields were removed from Position type in this refactor.
-    // If you need them, add stop_loss_price and take_profit_price back to Position.
-    // For now, this effect is a no-op placeholder.
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrice]);
-
   const needsPayment =
     account?.phase === "funded" && account?.payment_status === "pending";
 
@@ -809,38 +854,61 @@ export function useAccount(accountId: string) {
         const dateStr =
           getCalendarDate() ?? new Date().toISOString().split("T")[0];
 
-        const filledLegs = legs.map((leg) => {
-          let entryPrice = 0;
-          let entryIv: number | null = null;
+        // Phase A — resolve EVERY leg before touching the database.
+        const resolvedLegs: Array<{
+          instrument_type: InstrumentType;
+          side: Side;
+          quantity: number;
+          entry_price: number;
+          strike: number | null;
+          entry_iv: number | null;
+          strategy_id: string;
+          expiration_date: string | null;
+        }> = [];
 
+        for (const leg of legs) {
           if (leg.instrument_type === "equity") {
-            entryPrice = currentPrice;
-          } else {
-            const opt =
-              optionsChain.calls.find(
-                (o) => Math.abs(o.strike - (leg.strike ?? 0)) < 0.01,
-              ) ||
-              optionsChain.puts.find(
-                (o) => Math.abs(o.strike - (leg.strike ?? 0)) < 0.01,
-              );
-            entryPrice =
-              leg.side === "long" ? (opt?.ask ?? 0) : (opt?.bid ?? 0);
-            entryIv = opt?.iv ?? null;
+            resolvedLegs.push({
+              instrument_type: leg.instrument_type,
+              side: leg.side,
+              quantity: leg.quantity,
+              entry_price: currentPrice,
+              strike: null,
+              entry_iv: null,
+              strategy_id: strategyId,
+              expiration_date: null,
+            });
+            continue;
           }
 
-          return {
+          let opt: OptionLeg;
+          try {
+            opt = resolveLeg(
+              optionsChain,
+              leg.instrument_type,
+              leg.strike ?? 0,
+            );
+          } catch {
+            setOrderError(
+              `${leg.instrument_type} @ ${leg.strike} is no longer in the current chain. Reopen the builder and resubmit.`,
+            );
+            return; // ← legal & total: aborts the ENTIRE strategy, not one leg
+          }
+
+          resolvedLegs.push({
             instrument_type: leg.instrument_type,
             side: leg.side,
             quantity: leg.quantity,
-            entry_price: entryPrice,
+            entry_price: leg.side === "long" ? opt.ask : opt.bid,
             strike: leg.strike ?? null,
-            entry_iv: entryIv,
+            entry_iv: opt.iv,
             strategy_id: strategyId,
-            expiration_date: leg.instrument_type === "equity" ? null : dateStr,
-          };
-        });
+            expiration_date: dateStr,
+          });
+        }
 
-        await fillPositions(filledLegs);
+        // Phase B — all legs resolved cleanly; only now do we persist.
+        await fillPositions(resolvedLegs);
       });
     },
     [account, optionsChain, currentPrice, getCalendarDate, fillPositions],
@@ -862,15 +930,11 @@ export function useAccount(accountId: string) {
         delta += pos.quantity * (pos.side === "long" ? 1 : -1);
         continue;
       }
-
-      const leg =
-        optionsChain.calls.find(
-          (l) => Math.abs(l.strike - (pos.strike ?? 0)) < 0.01,
-        ) ||
-        optionsChain.puts.find(
-          (l) => Math.abs(l.strike - (pos.strike ?? 0)) < 0.01,
-        );
-
+      const leg = getLegPrice(
+        optionsChain,
+        pos.instrument_type,
+        pos.strike ?? 0,
+      );
       if (!leg) continue;
 
       const mult = pos.quantity * 100;
