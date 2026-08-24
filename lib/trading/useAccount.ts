@@ -209,7 +209,11 @@ export function useAccount(accountId: string) {
     async (patch: Partial<Account>) => {
       if (!account) return;
       setAccount((prev) => (prev ? { ...prev, ...patch } : prev));
-      await supabase.from("accounts").update(patch).eq("id", account.id);
+      const { error } = await supabase
+        .from("accounts")
+        .update(patch)
+        .eq("id", account.id);
+      if (error) console.error("persistAccount FAILED:", patch, error);
     },
     [account, supabase],
   );

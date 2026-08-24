@@ -1,3 +1,9 @@
+// Test "naked short put is rejected outright":
+expect(validateCoverage([...])).toMatch(/Uncovered net short puts/);
+
+// Test "99 shares cannot cover one short call":
+expect(validateCoverage([...])).toMatch(/Uncovered net short calls/);
+
  and up top: const isValid = legs.length > 0 && legs.every((l) => legIsResolvable(l, chain)); — replacing missingLegs with legs.filter((l) => !legIsResolvable(l, chain)).length
 
 
