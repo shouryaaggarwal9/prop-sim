@@ -133,7 +133,7 @@ export default function OrderPanel({
   /* ── Open positions view ── */
   if (positions.length > 0) {
     // just above `return (`, inside the component
-    const eqPnl = positionPnl(equityPos!, currentPrice);
+
     return (
       <div className="card space-y-3 p-4">
         <h3 className="text-sm font-medium">Positions</h3>
@@ -146,8 +146,14 @@ export default function OrderPanel({
             </p>
             <p>
               Unrealized:{" "}
-              <span className={eqPnl >= 0 ? "text-success" : "text-danger"}>
-                {eqPnl.toFixed(2)}
+              <span
+                className={
+                  positionPnl(equityPos, currentPrice) >= 0
+                    ? "text-success"
+                    : "text-danger"
+                }
+              >
+                {positionPnl(equityPos, currentPrice).toFixed(2)}
               </span>
             </p>
             {equityPos.stop_loss_price != null && (
