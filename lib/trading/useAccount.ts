@@ -281,18 +281,29 @@ export function useAccount(accountId: string) {
 
       if (!insErr && data)
         setPositions((prev) => mergeById(prev, data as Position[])); // ← FIX C4 //UA-4
+
+      // MG-4
+
+      // C5: premiums exchange at fill time. Equity-only fills net to 0 → no write.
+      const upfront = upfrontCash(legs);
+      if (upfront !== 0 && account) {
+        await persistAccount({ balance: account.balance + upfront });
+      }
     },
-    [account, supabase],
+    [account, supabase, persistAccount],
   );
 
+  // MG-5
   /** Closes a single position, returns { pnl, tradeRow } */
   const closePositionCore = useCallback(
     async (
       pos: Position,
       exitPrice: number,
       reason: string,
-    ): Promise<{ pnl: number; tradeRow: Trade | null }> => {
+    ): Promise<{ pnl: number; cashDelta: number; tradeRow: Trade | null }> => {
       const pnl = positionPnl(pos, exitPrice); //UA-3
+      // MG-5
+      const cashDelta = settlementCashDelta(pos, exitPrice); //C5
 
       const { data: tradeRow } = await supabase
         .from("trades")
@@ -316,7 +327,7 @@ export function useAccount(accountId: string) {
 
       await supabase.from("positions").delete().eq("id", pos.id);
 
-      return { pnl, tradeRow: tradeRow as Trade | null };
+      return { pnl, cashDelta, tradeRow: tradeRow as Trade | null };
     },
     [supabase],
   );
@@ -341,9 +352,14 @@ export function useAccount(accountId: string) {
     const reason = hitSL ? "sl" : "tp"; // both allowed by the DB CHECK constraint
 
     withLock(mutationLock, async () => {
-      const { pnl } = await closePositionCore(equityPos, exitPrice, reason);
+      // MG-6
+      const { cashDelta } = await closePositionCore(
+        equityPos,
+        exitPrice,
+        reason,
+      );
       setPositions((prev) => prev.filter((p) => p.id !== equityPos.id));
-      // if (account) await persistAccount({ balance: account.balance + pnl });
+      await persistAccount({ balance: account.balance + cashDelta }); //C5
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPrice]); //UA-7
@@ -360,22 +376,34 @@ export function useAccount(accountId: string) {
       for (const pos of positions) {
         let exitPrice: number;
 
+        // MG-7 (7a)
+
         if (pos.instrument_type === "equity") {
           exitPrice = currentPrice;
-        } else {
+        } else if (reason === "day_end") {
           exitPrice = getIntrinsicValue(
             pos.instrument_type,
             currentPrice,
             pos.strike ?? 0,
           );
+        } else {
+          // C5 refinement: manual intraday close marks at mid (keeps time value)
+          const leg = optionsChain
+            ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
+            : null;
+          exitPrice = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
         }
 
-        const { pnl, tradeRow } = await closePositionCore(
+        // MG-7 (7b)
+
+        const { pnl, cashDelta, tradeRow } = await closePositionCore(
           pos,
           exitPrice,
           reason,
         );
-        totalPnl += pnl;
+        void pnl; // recorded on the trade row; balance moves by cashDelta (C5)
+        totalPnl += cashDelta;
+
         if (tradeRow) newTrades.push(tradeRow);
         closedIds.push(pos.id);
       }
@@ -385,7 +413,7 @@ export function useAccount(accountId: string) {
 
       return totalPnl;
     },
-    [account, positions, currentPrice, closePositionCore],
+    [account, positions, currentPrice, closePositionCore, optionsChain],
   );
 
   /** Manual close — for backward compat with existing UI */
@@ -599,15 +627,28 @@ export function useAccount(accountId: string) {
 
     if (triggered) {
       withLock(mutationLock, async () => {
-        const notional = pendingOrder.quantity * trigger_price;
+        // MG-10
         await supabase
           .from("pending_orders")
           .delete()
           .eq("id", pendingOrder.id);
         setPendingOrder(null);
-        if (notional > buyingPower) {
+        const funds = quoteFunds(
+          availableCash,
+          [
+            {
+              instrument_type: "equity",
+              side,
+              quantity: pendingOrder.quantity,
+              entry_price: trigger_price,
+            },
+          ],
+          account.leverage,
+        );
+        if (!funds.affordable) {
           setOrderError(
-            "Pending order cancelled — buying power dropped too low by the time it triggered.",
+            funds.error ??
+              "Pending order cancelled — insufficient funds at trigger.",
           );
           return;
         }
@@ -624,7 +665,7 @@ export function useAccount(accountId: string) {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrice]);
+  }, [currentPrice, availableCash]);
 
   /* ── Single-leg equity order ── */
   const placeOrder = useCallback(
@@ -650,11 +691,23 @@ export function useAccount(accountId: string) {
           orderType === "market" ? currentPrice : triggerPrice;
         if (!referencePrice || referencePrice <= 0) return;
 
-        const notional = quantity * referencePrice;
-        if (notional > buyingPower) {
-          setOrderError(
-            `Order size (${notional.toFixed(0)}) exceeds buying power (${buyingPower.toFixed(0)} at ${account.leverage}x leverage).`,
-          );
+        // MG-9
+
+        // C5: unified funds gate — reserves notional ÷ leverage
+        const funds = quoteFunds(
+          availableCash,
+          [
+            {
+              instrument_type: "equity",
+              side,
+              quantity,
+              entry_price: referencePrice,
+            },
+          ],
+          account.leverage,
+        );
+        if (!funds.affordable) {
+          setOrderError(funds.error);
           return;
         }
 
@@ -734,6 +787,7 @@ export function useAccount(accountId: string) {
       buyingPower,
       supabase,
       fillPositions,
+      availableCash,
     ],
   );
 
@@ -826,11 +880,23 @@ export function useAccount(accountId: string) {
           return;
         }
 
-        const premium = leg.ask * quantity * 100;
-        if (premium > account.balance) {
-          setOrderError(
-            `Premium ($${premium.toFixed(0)}) exceeds available cash ($${account.balance.toFixed(0)}). Options require full cash coverage.`,
-          );
+        // MG-11
+
+        const funds = quoteFunds(
+          availableCash,
+          [
+            {
+              instrument_type: type,
+              side: "long",
+              quantity,
+              strike,
+              entry_price: leg.ask,
+            },
+          ],
+          account.leverage,
+        );
+        if (!funds.affordable) {
+          setOrderError(funds.error);
           return;
         }
 
@@ -852,7 +918,7 @@ export function useAccount(accountId: string) {
         ]);
       });
     },
-    [account, optionsChain, getCalendarDate, fillPositions],
+    [account, optionsChain, getCalendarDate, fillPositions, availableCash],
   );
 
   const placeStrategy = useCallback(
@@ -866,16 +932,7 @@ export function useAccount(accountId: string) {
           return;
         }
 
-        const analysis = analyzeStrategy(legs, optionsChain);
-
-        if (analysis.marginRequired > account.balance) {
-          setOrderError(
-            `Margin required ($${analysis.marginRequired.toFixed(0)}) exceeds available cash ($${account.balance.toFixed(0)}).`,
-          );
-          return;
-        }
-
-        setOrderError(null);
+        // MG-12 (12a)
 
         const strategyId = crypto.randomUUID();
         const dateStr =
@@ -934,11 +991,28 @@ export function useAccount(accountId: string) {
           });
         }
 
+        // MG-12 (12b)
+        // C5 gate: exact worst-case reservation + immediate premium flows,
+        // checked against fully-resolved leg prices (no estimates).
+        const funds = quoteFunds(availableCash, resolvedLegs, account.leverage);
+        if (!funds.affordable) {
+          setOrderError(funds.error);
+          return;
+        }
+        setOrderError(null);
+
         // Phase B — all legs resolved cleanly; only now do we persist.
         await fillPositions(resolvedLegs);
       });
     },
-    [account, optionsChain, currentPrice, getCalendarDate, fillPositions],
+    [
+      account,
+      optionsChain,
+      currentPrice,
+      getCalendarDate,
+      fillPositions,
+      availableCash,
+    ],
   );
 
   useEffect(() => {
@@ -981,6 +1055,8 @@ export function useAccount(accountId: string) {
     });
   }, [positions, optionsChain]);
 
+  // MG-13
+
   return {
     account,
     positions,
@@ -993,6 +1069,8 @@ export function useAccount(accountId: string) {
     formingBar: replay.formingBar,
     currentPrice,
     equity,
+    reserved,
+    availableCash,
     peakEquity,
     buyingPower,
     maxQuantity,
