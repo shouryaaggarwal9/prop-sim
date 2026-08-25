@@ -31,6 +31,15 @@ import {
   type StrategyLegInput,
 } from "@/lib/market/strategies";
 
+import {
+  quoteFunds,
+  upfrontCash,
+  settlementCashDelta,
+  reservationFor,
+  availability,
+  type MarginLeg,
+} from "./margin";
+
 const TICK_MS = 200;
 const BARS_PER_SIMULATED_DAY = 78;
 
@@ -169,7 +178,13 @@ export function useAccount(accountId: string) {
           ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
           : null;
         const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
-        total += positionPnl(pos, mark); // ← direction now honored for shorts
+
+        // MG-3
+        // C5 MODEL: balance already contains this leg's upfront premium flow,
+        // so equity adds the leg's MARK VALUE (not P&L). Identity:
+        // (starting − entry·q·100·d) + mark·q·100·d ≡ starting + unrealizedPnl.
+        const dir = pos.side === "long" ? 1 : -1;
+        total += mark * pos.quantity * 100 * dir;
       }
     } //UA-2
     return total;
@@ -201,8 +216,16 @@ export function useAccount(accountId: string) {
 
   const peakEquity = Math.max(account?.peak_equity ?? 0, equity);
   const buyingPower = equity * (account?.leverage ?? 0);
+
+  //MG-2 below
+  /* ── C5 LEDGER: reservations derived live from the open book ── */
+  const leverage = account?.leverage ?? 10;
+  const reserved = reservationFor(positions, leverage);
+  const availableCash = availability(account?.balance ?? 0, reserved);
   const maxQuantity =
-    currentPrice > 0 ? Math.floor(buyingPower / currentPrice) : 0;
+    currentPrice > 0
+      ? Math.floor((availableCash * leverage) / currentPrice)
+      : 0;
 
   /* ── Persistence helpers ── */
   const persistAccount = useCallback(
