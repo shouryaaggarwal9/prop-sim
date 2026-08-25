@@ -9,8 +9,9 @@ import RuleStatusBar from "@/components/RuleStatusBar";
 import OrderPanel from "@/components/OrderPanel";
 import TradeLog from "@/components/TradeLog";
 import { createCheckoutSession } from "@/app/actions/payments";
-import { useEffect } from "react";
 import PortfolioGreeksPanel from "./PortfolioGreeksPanel";
+import { useEffect, useMemo } from "react";
+import { getSupabaseClient } from "@/lib/supabase/client";
 
 export default function TradeClient({ accountId }: { accountId: string }) {
   // MG-16
@@ -48,14 +49,31 @@ export default function TradeClient({ accountId }: { accountId: string }) {
   const paymentSuccess = searchParams.get("payment") === "success";
   const paymentCanceled = searchParams.get("payment") === "canceled";
 
-  // useEffect(() => {
-  //   if (paymentSuccess) {
-  //     const timer = setTimeout(() => {
-  //       window.location.href = window.location.pathname; // hard refresh to clear ?payment=success
-  //     }, 3000);
-  //     return () => clearTimeout(timer);
-  //   }
-  // }, [paymentSuccess]);
+  /* N3: after Stripe redirects back, poll until the webhook lands, then hard-
+   * reload to clear ?payment=success and refetch everything at once. */
+  const supabase = useMemo(() => getSupabaseClient(), []);
+  useEffect(() => {
+    if (!paymentSuccess || !account) return;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const poll = setInterval(async () => {
+      const { data } = await supabase
+        .from("accounts")
+        .select("payment_status")
+        .eq("id", accountId)
+        .single();
+      if (cancelled) return;
+      if (data?.payment_status === "paid") {
+        window.location.replace(window.location.pathname); // clears the query param
+      } else if (Date.now() - startedAt > 30000) {
+        clearInterval(poll); // give up silently; user can refresh manually
+      }
+    }, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+    };
+  }, [paymentSuccess, account, accountId, supabase]);
 
   if (loading) {
     return <div className="p-8 text-sm text-muted">Loading account…</div>;
