@@ -434,7 +434,7 @@ export function useAccount(accountId: string) {
         let finalBalance = account.balance;
 
         if (positions.length > 0) {
-          const totalPnl = await closeAllPositions("day_end");
+          const totalPnl = await closeAllPositions("finalized");
           finalBalance = account.balance + totalPnl;
         }
 

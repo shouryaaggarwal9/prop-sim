@@ -4,7 +4,6 @@ const STATUS_STYLES: Record<Account["status"], string> = {
   active: "bg-accent/15 text-accent",
   passed: "bg-success/15 text-success",
   failed: "bg-danger/15 text-danger",
-  pending_payment: "bg-muted/15 text-muted",
 };
 
 const FAIL_REASON_LABEL: Record<string, string> = {

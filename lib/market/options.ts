@@ -68,7 +68,7 @@ function blackScholes(
   let delta: number;
   let gamma: number;
   let theta: number;
-  let vega: number; // Annualized Theta divided by 252 trading days
+  let vega: number;
 
   if (type === "call") {
     price = S * Nd1 - K * discount * Nd2;

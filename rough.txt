@@ -1,3 +1,76 @@
+-- accounts:
+  constraint accounts_user_id_fkey foreign key (user_id) references auth.users(id) on delete cascade,
+  constraint accounts_source_account_id_fkey foreign key (source_account_id) references public.accounts(id)
+  -- source_account_id: intentionally NO ACTION — evaluation lineage is preserved
+
+-- positions / trades / pending_orders (both FKs each):
+  ... foreign key (user_id) references auth.users(id) on delete cascade,
+  ... foreign key (account_id) references public.accounts(id) on delete cascade
+
+-- payments:
+  constraint payments_user_id_fkey foreign key (user_id) references auth.users(id),
+  constraint payments_account_id_fkey foreign key (account_id) references public.accounts(id) on delete cascade
+
+-- withdrawals (both):
+  ... foreign key (user_id) references auth.users(id),
+  ... foreign key (account_id) references public.accounts(id)
+  -- intentionally NO ACTION: financial records survive account/user deletion
+
+
+Verify 4-[
+  {
+    "tablename": "accounts",
+    "policyname": "own accounts",
+    "cmd": "ALL",
+    "with_check": "(auth.uid() = user_id)"
+  },
+  {
+    "tablename": "payments",
+    "policyname": "Users own their payments",
+    "cmd": "ALL",
+    "with_check": "(auth.uid() = user_id)"
+  },
+  {
+    "tablename": "pending_orders",
+    "policyname": "own pending orders",
+    "cmd": "ALL",
+    "with_check": "(auth.uid() = user_id)"
+  },
+  {
+    "tablename": "positions",
+    "policyname": "own positions",
+    "cmd": "ALL",
+    "with_check": "(auth.uid() = user_id)"
+  },
+  {
+    "tablename": "trades",
+    "policyname": "own trades",
+    "cmd": "ALL",
+    "with_check": "(auth.uid() = user_id)"
+  },
+  {
+    "tablename": "withdrawals",
+    "policyname": "Users own their withdrawals",
+    "cmd": "ALL",
+    "with_check": "(auth.uid() = user_id)"
+  }
+]
+grep return-PS E:\Documents\RR\Padhai\1d\cy_26\nine\fcf_fp2_cld> findstr /s /n "payment_status" *.ts *.tsx
+app\actions\payments.ts:19:    .select("id, status, payment_status, phase")
+app\actions\payments.ts:24:  if (!account || account.payment_status !== "pending") {
+app\api\webhooks\stripe\route.ts:39:      .update({ status: "active", payment_status: "paid" })
+lib\trading\types.ts:23:  payment_status: string;
+lib\trading\useAccount.ts:475:              payment_status: "pending",
+lib\trading\useAccount.ts:864:    account?.phase === "funded" && account?.payment_status === "pending";
+node_modules\stripe\cjs\resources\Checkout\Sessions.d.ts:241:    payment_status: Session.PaymentStatus;
+node_modules\stripe\esm\resources\Checkout\Sessions.d.ts:241:    payment_status: Session.PaymentStatus;
+PS E:\Documents\RR\Padhai\1d\cy_26\nine\fcf_fp2_cld> 
+
+I re run tsc and confirm that it is still silent.
+
+//Iske upar
+
+
 // Test "naked short put is rejected outright":
 expect(validateCoverage([...])).toMatch(/Uncovered net short puts/);
 

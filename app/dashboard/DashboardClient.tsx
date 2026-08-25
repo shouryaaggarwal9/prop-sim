@@ -13,7 +13,6 @@ const STATUS_STYLES: Record<Account["status"], string> = {
   active: "bg-accent/15 text-accent",
   passed: "bg-success/15 text-success",
   failed: "bg-danger/15 text-danger",
-  pending_payment: "bg-warning/15 text-warning",
 };
 
 export default function DashboardClient({

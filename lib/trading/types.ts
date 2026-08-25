@@ -1,9 +1,10 @@
-export type AccountStatus = "active" | "passed" | "failed" | "pending_payment";
+export type AccountStatus = "active" | "passed" | "failed";
 export type FailReason = "daily_loss" | "trailing_drawdown" | null;
 export type Side = "long" | "short";
 export type AccountPhase = "evaluation" | "funded";
 export type OrderType = "market" | "limit" | "stop";
 export type InstrumentType = "equity" | "call" | "put";
+export type PaymentStatus = "not_required" | "pending" | "paid" | "failed";
 
 export interface Account {
   id: string;
@@ -20,7 +21,7 @@ export interface Account {
   leverage: number;
   source_account_id: string | null;
   status: AccountStatus;
-  payment_status: string;
+  payment_status: PaymentStatus;
   fail_reason: FailReason;
   epoch: string;
   created_at: string;
