@@ -13,6 +13,7 @@ import { useEffect } from "react";
 import PortfolioGreeksPanel from "./PortfolioGreeksPanel";
 
 export default function TradeClient({ accountId }: { accountId: string }) {
+  // MG-16
   const {
     account,
     positions,
@@ -39,6 +40,8 @@ export default function TradeClient({ accountId }: { accountId: string }) {
     placeOptionOrder,
     portfolioGreeks,
     placeStrategy,
+    availableCash,
+    reserved,
   } = useAccount(accountId);
 
   const searchParams = useSearchParams();
@@ -162,6 +165,9 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             onPlaceOptionOrder={placeOptionOrder}
             optionsChain={optionsChain}
             onPlaceStrategy={placeStrategy}
+            // MG-16
+            availableCash={availableCash}
+            leverage={account.leverage}
           />
           <PortfolioGreeksPanel greeks={portfolioGreeks} />
           {isReplayDone && (

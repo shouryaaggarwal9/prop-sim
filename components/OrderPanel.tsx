@@ -21,12 +21,15 @@ const ORDER_TYPES: OrderType[] = ["market", "limit", "stop"];
 
 type InstrumentTab = "equity" | "options" | "strategies";
 
+// MG-14
 export default function OrderPanel({
   account,
   positions,
   pendingOrder,
   currentPrice,
   buyingPower,
+  availableCash,
+  leverage,
   maxQuantity,
   orderError,
   optionsChain,
@@ -42,6 +45,8 @@ export default function OrderPanel({
   pendingOrder: PendingOrder | null;
   currentPrice: number;
   buyingPower: number;
+  availableCash: number;
+  leverage: number;
   maxQuantity: number;
   orderError: string | null;
   optionsChain: OptionsChain | null;
@@ -513,8 +518,9 @@ export default function OrderPanel({
                 </p>
               )}
 
+              {/* MG-15 */}
               <p className="text-xs text-muted">
-                Cash available: ${account.balance.toFixed(0)}
+                Cash available: ${availableCash.toFixed(0)}
               </p>
 
               <button
@@ -538,6 +544,8 @@ export default function OrderPanel({
               chain={optionsChain}
               onPlaceStrategy={onPlaceStrategy}
               disabled={disabled}
+              availableCash={availableCash}
+              leverage={leverage}
             />
           )}
         </>

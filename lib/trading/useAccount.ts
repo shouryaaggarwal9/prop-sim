@@ -1071,6 +1071,7 @@ export function useAccount(accountId: string) {
     equity,
     reserved,
     availableCash,
+    leverage,
     peakEquity,
     buyingPower,
     maxQuantity,

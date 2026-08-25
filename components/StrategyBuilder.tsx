@@ -8,11 +8,16 @@ import {
   type StrategyType,
   type StrategyLegInput,
 } from "@/lib/market/strategies";
+// MG-18
+import { quoteFunds, type MarginLeg } from "@/lib/trading/margin";
 
 function StrategyBuilder({
   chain,
   onPlaceStrategy,
   disabled,
+  // MG-17
+  availableCash,
+  leverage,
 }: {
   chain: OptionsChain;
   onPlaceStrategy: (
@@ -20,6 +25,8 @@ function StrategyBuilder({
     legs: StrategyLegInput[],
   ) => Promise<void>;
   disabled: boolean;
+  availableCash: number;
+  leverage: number;
 }) {
   const [selectedType, setSelectedType] =
     useState<StrategyType>("bull_call_spread");
@@ -42,6 +49,26 @@ function StrategyBuilder({
   const analysis = useMemo(
     () => analyzeStrategy(scaledLegs, chain),
     [scaledLegs, chain],
+  );
+
+  //MG-19
+
+  // Price legs with the SAME convention the engine uses (long→ask, short→bid,
+  // type-aware) so displayed funds always match enforcement.
+  const pricedLegs: MarginLeg[] = legs.map((l) => {
+    if (l.instrument_type === "equity") {
+      return { ...l, entry_price: chain.underlyingPrice };
+    }
+    const list = l.instrument_type === "call" ? chain.calls : chain.puts;
+    const opt = list.find((o) => Math.abs(o.strike - (l.strike ?? 0)) < 0.01);
+    return {
+      ...l,
+      entry_price: opt ? (l.side === "long" ? opt.ask : opt.bid) : 0,
+    };
+  });
+  const funds = useMemo(
+    () => quoteFunds(availableCash, pricedLegs, leverage),
+    [availableCash, pricedLegs, leverage],
   );
 
   function legIsResolvable(leg: StrategyLegInput, ch: OptionsChain): boolean {
@@ -84,9 +111,7 @@ function StrategyBuilder({
           </option>
         ))}
       </select>
-
       <p className="text-xs text-muted">{config.description}</p>
-
       <div>
         <label className="mb-1 block text-xs text-muted">Contracts</label>
         <input
@@ -97,7 +122,6 @@ function StrategyBuilder({
           onChange={(e) => setContracts(Math.max(1, Number(e.target.value)))}
         />
       </div>
-
       <div className="space-y-2">
         {legs.map((leg, i) => {
           const found = legIsResolvable(leg, chain);
@@ -128,19 +152,22 @@ function StrategyBuilder({
                 />
               )}
               <span className="ml-auto text-xs text-muted">
-                ×{leg.quantity}
+                x{leg.quantity}
               </span>
             </div>
           );
         })}
       </div>
-
       {missingLegs.length > 0 && (
         <p className="text-xs text-danger">
           {missingLegs.length} leg(s) not found in chain. Adjust strikes.
         </p>
       )}
-
+      {/* MG-20 */}
+      {!funds.affordable && funds.error && (
+        <p className="text-xs text-danger">{funds.error}</p>
+      )}
+      .
       <div className="rounded-lg border border-white/5 bg-white/2 p-3 text-xs space-y-1">
         <div className="flex justify-between">
           <span className="text-muted">
@@ -157,8 +184,14 @@ function StrategyBuilder({
           <span className="text-danger">${analysis.maxLoss.toFixed(2)}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-muted">Margin</span>
-          <span>${analysis.marginRequired.toFixed(2)}</span>
+          {/* MG-20 */}
+          <span className="text-muted">
+            Reserved → ${funds.reservation.toFixed(2)}
+          </span>
+          <span className="text-muted">
+            Upfront → {funds.upfront >= 0 ? "+" : "-"}$
+            {Math.abs(funds.upfront).toFixed(2)}
+          </span>
         </div>
         {cleanBreakevens.length > 0 && (
           <div className="flex justify-between">
@@ -171,12 +204,12 @@ function StrategyBuilder({
           <span>{analysis.greeks.delta.toFixed(2)}</span>
         </div>
       </div>
-
       <button
         className={
           config.category === "credit" ? "btn-sell w-full" : "btn-buy w-full"
         }
-        disabled={disabled || busy || !isValid}
+        // MG-20
+        disabled={disabled || busy || !isValid || !funds.affordable}
         onClick={handleSubmit}
       >
         {busy ? "Executing..." : `Place ${config.name}`}
