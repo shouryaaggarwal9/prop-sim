@@ -16,11 +16,15 @@ export default function AccountStats({
   account,
   equity,
   currentPrice,
+  reserved,
+  availableCash,
 }: {
   account: Account;
   equity: number;
   peakEquity: number;
   currentPrice: number;
+  reserved: number;
+  availableCash: number;
 }) {
   const dailyPnL = equity - account.day_start_equity;
   const totalPnL = equity - account.starting_balance;
@@ -52,6 +56,18 @@ export default function AccountStats({
         <dt className="text-muted">Balance</dt>
         <dd className="text-right tabular-nums">
           ${account.balance.toFixed(2)}
+        </dd>
+
+        <dt className="text-muted">Reserved</dt>
+        <dd className="text-right tabular-nums">${reserved.toFixed(2)}</dd>
+
+        <dt className="text-muted">Available</dt>
+        <dd
+          className={`text-right tabular-nums ${
+            availableCash <= 0 ? "text-danger" : ""
+          }`}
+        >
+          ${availableCash.toFixed(2)}
         </dd>
 
         <dt className="text-muted">Equity</dt>

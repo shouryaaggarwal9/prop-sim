@@ -144,6 +144,8 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             equity={equity}
             peakEquity={peakEquity}
             currentPrice={currentPrice}
+            reserved={reserved}
+            availableCash={availableCash}
           />
           <RuleStatusBar
             account={account}
