@@ -227,19 +227,24 @@ export function useAccount(accountId: string) {
       ? Math.floor((availableCash * leverage) / currentPrice)
       : 0;
 
-  /* ── Persistence helpers ── */
-  const persistAccount = useCallback(
-    async (patch: Partial<Account>) => {
-      if (!account) return;
-      setAccount((prev) => (prev ? { ...prev, ...patch } : prev));
-      const { error } = await supabase
-        .from("accounts")
-        .update(patch)
-        .eq("id", account.id);
-      if (error) console.error("persistAccount FAILED:", patch, error);
-    },
-    [account, supabase],
-  );
+  /* ── P3: server-truth readers ── */
+  const refreshAccount = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("accounts")
+      .select("*")
+      .eq("id", accountId)
+      .single();
+    if (!error && data) setAccount(data as Account);
+  }, [accountId, supabase]);
+
+  const refetchTrades = useCallback(async () => {
+    const { data } = await supabase
+      .from("trades")
+      .select("*")
+      .eq("account_id", accountId)
+      .order("closed_at", { ascending: false });
+    if (data) setTrades(data as Trade[]);
+  }, [accountId, supabase]);
 
   /* ── Position lifecycle ── */
 
@@ -259,77 +264,58 @@ export function useAccount(accountId: string) {
       }>,
     ) => {
       if (!account || legs.length === 0) return;
-      const inserts = legs.map((leg) => ({
-        account_id: account.id,
-        user_id: account.user_id,
-        instrument_type: leg.instrument_type,
-        side: leg.side,
-        quantity: leg.quantity,
-        entry_price: leg.entry_price,
-        strike: leg.strike ?? null,
-        entry_iv: leg.entry_iv ?? null,
-        strategy_id: leg.strategy_id ?? null,
-        expiration_date: leg.expiration_date ?? null,
-        stop_loss_price: leg.stop_loss_price ?? null,
-        take_profit_price: leg.take_profit_price ?? null, //UA-4
-      }));
 
-      const { data, error: insErr } = await supabase
-        .from("positions")
-        .insert(inserts)
-        .select();
-
-      if (!insErr && data)
-        setPositions((prev) => mergeById(prev, data as Position[])); // ← FIX C4 //UA-4
-
-      // MG-4
-
-      // C5: premiums exchange at fill time. Equity-only fills net to 0 → no write.
-      const upfront = upfrontCash(legs);
-      if (upfront !== 0 && account) {
-        await persistAccount({ balance: account.balance + upfront });
+      // P3: ONE atomic server transaction — inserts + upfront cash.
+      const { data, error: rpcErr } = await supabase.rpc("apply_fill", {
+        p_account_id: account.id,
+        p_legs: legs,
+      });
+      if (rpcErr || !data) {
+        setOrderError(rpcErr?.message ?? "Fill rejected by server.");
+        return;
       }
+
+      // SETOF functions return ARRAYS — index the array, destructure the row.
+      const [row] = data as Array<{
+        inserted_ids: string[];
+        new_balance: number;
+      }>;
+      if (
+        !row ||
+        !Array.isArray(row.inserted_ids) ||
+        row.inserted_ids.length !== legs.length
+      ) {
+        setOrderError("Fill returned incomplete data from server.");
+        return;
+      }
+      const { inserted_ids: insertedIds, new_balance: newBalance } = row;
+
+      // Local mirror built from OUR legs + THEIR ids.
+      setPositions((prev) =>
+        mergeById(
+          prev,
+          legs.map((leg, i) => ({
+            id: insertedIds[i],
+            account_id: account.id,
+            user_id: account.user_id,
+            instrument_type: leg.instrument_type,
+            side: leg.side,
+            quantity: leg.quantity,
+            entry_price: leg.entry_price,
+            strike: leg.strike ?? null,
+            entry_iv: leg.entry_iv ?? null,
+            strategy_id: leg.strategy_id ?? null,
+            expiration_date: leg.expiration_date ?? null,
+            stop_loss_price: leg.stop_loss_price ?? null,
+            take_profit_price: leg.take_profit_price ?? null,
+            opened_at: new Date().toISOString(),
+          })),
+        ),
+      );
+      // Server's balance wins.
+      setAccount((prev) => (prev ? { ...prev, balance: newBalance } : prev));
     },
-    [account, supabase, persistAccount],
-  );
-
-  // MG-5
-  /** Closes a single position, returns { pnl, tradeRow } */
-  const closePositionCore = useCallback(
-    async (
-      pos: Position,
-      exitPrice: number,
-      reason: string,
-    ): Promise<{ pnl: number; cashDelta: number; tradeRow: Trade | null }> => {
-      const pnl = positionPnl(pos, exitPrice); //UA-3
-      // MG-5
-      const cashDelta = settlementCashDelta(pos, exitPrice); //C5
-
-      const { data: tradeRow } = await supabase
-        .from("trades")
-        .insert({
-          account_id: pos.account_id,
-          user_id: pos.user_id,
-          instrument_type: pos.instrument_type,
-          side: pos.side,
-          quantity: pos.quantity,
-          entry_price: pos.entry_price,
-          exit_price: exitPrice,
-          strike: pos.strike,
-          pnl,
-          opened_at: pos.opened_at,
-          closed_at: new Date().toISOString(),
-          close_reason: reason,
-          strategy_id: pos.strategy_id,
-        })
-        .select()
-        .single();
-
-      await supabase.from("positions").delete().eq("id", pos.id);
-
-      return { pnl, cashDelta, tradeRow: tradeRow as Trade | null };
-    },
-    [supabase],
+    [account, supabase],
   );
 
   /* ── Auto-close on stop-loss / take-profit hit ── */
@@ -352,150 +338,145 @@ export function useAccount(accountId: string) {
     const reason = hitSL ? "sl" : "tp"; // both allowed by the DB CHECK constraint
 
     withLock(mutationLock, async () => {
-      // MG-6
-      const { cashDelta } = await closePositionCore(
-        equityPos,
-        exitPrice,
-        reason,
-      );
+      // P3: atomic — trade row + position delete + cash, one transaction.
+      const { error: rpcErr } = await supabase.rpc("close_positions", {
+        p_account_id: account.id,
+        p_exits: [{ position_id: equityPos.id, exit_price: exitPrice }],
+        p_reason: reason,
+      });
+      if (rpcErr) {
+        if (rpcErr.message.includes("missing")) {
+          // Another writer closed it first (second tab/race). Trust the server.
+          setPositions((prev) => prev.filter((p) => p.id !== equityPos.id));
+          await Promise.all([refreshAccount(), refetchTrades()]);
+          return;
+        }
+        setOrderError(rpcErr.message);
+        return;
+      }
       setPositions((prev) => prev.filter((p) => p.id !== equityPos.id));
-      await persistAccount({ balance: account.balance + cashDelta }); //C5
+      await Promise.all([refreshAccount(), refetchTrades()]);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrice]); //UA-7
+  }, [currentPrice]); //UA-7 · P3
 
   /** Closes ALL positions atomically. Returns total PnL. */
+  /** Closes ALL positions via one atomic RPC. Returns settlement applied. */
   const closeAllPositions = useCallback(
     async (reason: string = "manual"): Promise<number> => {
       if (!account || positions.length === 0) return 0;
 
-      let totalPnl = 0;
-      const newTrades: Trade[] = [];
-      const closedIds: string[] = [];
-
-      for (const pos of positions) {
+      // Exit-price policy stays client-side (Phase-3 boundary decision B):
+      // day-end/finalized settle at intrinsic; intraday manual closes at mid.
+      const exits = positions.map((pos) => {
         let exitPrice: number;
-
-        // MG-7 (7a)
-
         if (pos.instrument_type === "equity") {
           exitPrice = currentPrice;
-        } else if (reason === "day_end") {
+        } else if (reason === "day_end" || reason === "finalized") {
           exitPrice = getIntrinsicValue(
             pos.instrument_type,
             currentPrice,
             pos.strike ?? 0,
           );
         } else {
-          // C5 refinement: manual intraday close marks at mid (keeps time value)
           const leg = optionsChain
             ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
             : null;
           exitPrice = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
         }
-
-        // MG-7 (7b)
-
-        const { pnl, cashDelta, tradeRow } = await closePositionCore(
-          pos,
-          exitPrice,
-          reason,
-        );
-        void pnl; // recorded on the trade row; balance moves by cashDelta (C5)
-        totalPnl += cashDelta;
-
-        if (tradeRow) newTrades.push(tradeRow);
-        closedIds.push(pos.id);
-      }
-
-      setPositions((prev) => prev.filter((p) => !closedIds.includes(p.id)));
-      setTrades((prev) => [...newTrades, ...prev]);
-
-      return totalPnl;
-    },
-    [account, positions, currentPrice, closePositionCore, optionsChain],
-  );
-
-  /** Manual close — for backward compat with existing UI */
-  const closePosition = useCallback(async () => {
-    await withLock(mutationLock, async () => {
-      const totalPnl = await closeAllPositions("manual");
-      if (totalPnl !== 0 && account) {
-        await persistAccount({ balance: account.balance + totalPnl });
-      }
-    });
-  }, [account, closeAllPositions, persistAccount]);
-
-  /** Finalize account (pass/fail) — force-closes everything */
-  const finalizeAccount = useCallback(
-    async (patch: Partial<Account>) => {
-      await withLock(mutationLock, async () => {
-        if (!account) return;
-        let finalBalance = account.balance;
-
-        if (positions.length > 0) {
-          const totalPnl = await closeAllPositions("finalized");
-          finalBalance = account.balance + totalPnl;
-        }
-
-        if (pendingOrder) {
-          await supabase
-            .from("pending_orders")
-            .delete()
-            .eq("id", pendingOrder.id);
-          setPendingOrder(null);
-        }
-
-        await persistAccount({ ...patch, balance: finalBalance });
-
-        if (patch.status === "passed" && account.phase === "evaluation") {
-          const { data: existing } = await supabase
-            .from("accounts")
-            .select("id")
-            .eq("source_account_id", account.id)
-            .maybeSingle();
-
-          if (existing) {
-            setFundedAccountId(existing.id);
-            return;
-          }
-
-          const { data: funded, error: fundedErr } = await supabase
-            .from("accounts")
-            .insert({
-              user_id: account.user_id,
-              symbol: account.symbol,
-              epoch: account.epoch,
-              starting_balance: account.starting_balance,
-              balance: account.starting_balance,
-              peak_equity: account.starting_balance,
-              day_start_equity: account.starting_balance,
-              status: "active",
-              phase: "funded",
-              payment_status: "pending",
-              source_account_id: account.id,
-            })
-            .select()
-            .single();
-
-          if (fundedErr) {
-            console.error("Funded account insert failed:", fundedErr);
-            setError("Failed to create funded account.");
-            return;
-          }
-
-          if (funded) setFundedAccountId(funded.id);
-        }
+        return { position_id: pos.id, exit_price: exitPrice };
       });
+
+      const { data, error: rpcErr } = await supabase.rpc("close_positions", {
+        p_account_id: account.id,
+        p_exits: exits,
+        p_reason: reason,
+      });
+      if (rpcErr) {
+        setOrderError(rpcErr.message);
+        return 0;
+      }
+
+      setPositions([]);
+      await Promise.all([refetchTrades(), refreshAccount()]);
+      return (data as number) ?? 0;
     },
     [
       account,
       positions,
-      pendingOrder,
-      closeAllPositions,
+      currentPrice,
+      optionsChain,
       supabase,
-      persistAccount,
+      refetchTrades,
+      refreshAccount,
     ],
+  );
+
+  /** Manual close-all — balance/trades handled inside the RPC. */
+  const closePosition = useCallback(async () => {
+    await withLock(mutationLock, async () => {
+      await closeAllPositions("manual");
+    });
+  }, [closeAllPositions]);
+
+  /** Finalize account (pass/fail) — force-closes everything */
+  /** Finalize (pass/fail) — force-close, status flip, and funded-child minting
+   *  occur in ONE server transaction; UNIQUE index still backs the twin-mint. */
+  const finalizeAccount = useCallback(
+    async (patch: {
+      status: "passed" | "failed";
+      fail_reason?: "daily_loss" | "trailing_drawdown" | null;
+    }) => {
+      await withLock(mutationLock, async () => {
+        if (!account) return;
+
+        const exits = positions.map((pos) => ({
+          position_id: pos.id,
+          exit_price:
+            pos.instrument_type === "equity"
+              ? currentPrice
+              : getIntrinsicValue(
+                  pos.instrument_type,
+                  currentPrice,
+                  pos.strike ?? 0,
+                ),
+        }));
+
+        const { data, error: rpcErr } = await supabase.rpc("finalize_account", {
+          p_account_id: account.id,
+          p_status: patch.status,
+          p_fail_reason: patch.fail_reason ?? null,
+          p_exits: exits,
+        });
+        if (rpcErr) {
+          console.error("[finalize]", rpcErr.message);
+          setError("Failed to finalize account.");
+          return;
+        }
+
+        const result = data as {
+          balance: number;
+          funded_account_id: string | null;
+        };
+        setPendingOrder(null);
+        await Promise.all([refetchTrades(), refreshAccount()]);
+
+        if (patch.status === "passed" && account.phase === "evaluation") {
+          if (result.funded_account_id) {
+            setFundedAccountId(result.funded_account_id);
+          } else {
+            // Child pre-existed (earlier pass). Re-link, never re-mint.
+            const { data: existing } = await supabase
+              .from("accounts")
+              .select("id")
+              .eq("source_account_id", account.id)
+              .maybeSingle();
+            if (existing) setFundedAccountId(existing.id);
+          }
+        }
+      });
+    },
+    [account, positions, currentPrice, supabase, refetchTrades, refreshAccount],
   );
 
   /* ── Persist replay progress ── */
@@ -504,7 +485,14 @@ export function useAccount(accountId: string) {
     if (!account || account.status !== "active") return; //UA-9
     if (lastPersistedBarIndexRef.current === replay.barIndex) return;
     lastPersistedBarIndexRef.current = replay.barIndex;
-    persistAccount({ replay_bar_index: replay.barIndex });
+    supabase
+      .rpc("set_replay_index", {
+        p_account_id: account.id,
+        p_index: replay.barIndex,
+      })
+      .then(({ error }) => {
+        if (error) console.error("[replay-index]", error.message);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay.barIndex]);
 
@@ -529,30 +517,32 @@ export function useAccount(accountId: string) {
     lastDayRef.current = day;
 
     withLock(mutationLock, async () => {
-      let dayEndBalance = account.balance;
+      // P3: ONE transaction — settle all, purge pendings, roll the day.
+      const exits = positions.map((pos) => ({
+        position_id: pos.id,
+        exit_price:
+          pos.instrument_type === "equity"
+            ? currentPrice
+            : getIntrinsicValue(
+                pos.instrument_type,
+                currentPrice,
+                pos.strike ?? 0,
+              ),
+      }));
 
-      if (positions.length > 0) {
-        const totalPnl = await closeAllPositions("day_end");
-        dayEndBalance = account.balance + totalPnl;
-      }
-
-      if (pendingOrder) {
-        await supabase
-          .from("pending_orders")
-          .delete()
-          .eq("id", pendingOrder.id);
-        setPendingOrder(null);
-      }
-
-      const completedDayPnL = dayEndBalance - account.day_start_equity;
-      await persistAccount({
-        balance: dayEndBalance,
-        day_start_equity: dayEndBalance,
-        daily_pnls: [...account.daily_pnls, completedDayPnL],
+      const { error: rpcErr } = await supabase.rpc("day_close", {
+        p_account_id: account.id,
+        p_exits: exits,
       });
+      if (rpcErr) {
+        console.error("[day_close]", rpcErr.message);
+        return;
+      }
 
-      // New day: generate fresh chain
-      generateDayChain();
+      setPositions([]);
+      setPendingOrder(null);
+      await Promise.all([refetchTrades(), refreshAccount()]);
+      generateDayChain(); // fresh chain for the new simulated day
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay.barIndex]);
@@ -594,7 +584,17 @@ export function useAccount(accountId: string) {
     } else if (result.status === "failed") {
       finalizeAccount({ status: "failed", fail_reason: result.reason });
     } else if (peakEquity > account.peak_equity) {
-      persistAccount({ peak_equity: peakEquity });
+      setAccount((prev) =>
+        prev ? { ...prev, peak_equity: peakEquity } : prev,
+      );
+      supabase
+        .rpc("update_peak_equity", {
+          p_account_id: account.id,
+          p_peak: peakEquity,
+        })
+        .then(({ error }) => {
+          if (error) console.error("[peak]", error.message);
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [equity]);
@@ -762,21 +762,28 @@ export function useAccount(accountId: string) {
           return;
         }
 
-        const { data, error: insErr } = await supabase
-          .from("pending_orders")
-          .insert({
-            account_id: account.id,
-            user_id: account.user_id,
-            side,
-            order_type: orderType,
-            quantity,
-            trigger_price: triggerPrice,
-            stop_loss_price: stopLoss ?? null,
-            take_profit_price: takeProfit ?? null,
-          })
-          .select()
-          .single();
-        if (!insErr && data) setPendingOrder(data as PendingOrder);
+        const { data, error: rpcErr } = await supabase.rpc(
+          "place_pending_order",
+          {
+            p_account_id: account.id,
+            p_side: side,
+            p_order_type: orderType,
+            p_quantity: quantity,
+            p_trigger: triggerPrice!,
+            p_sl: stopLoss ?? null,
+            p_tp: takeProfit ?? null,
+          },
+        );
+        if (rpcErr) {
+          setOrderError(rpcErr.message);
+          return;
+        }
+        const [orderRow] = (data ?? []) as PendingOrder[];
+        if (!orderRow) {
+          setOrderError("Server accepted the order but returned no row.");
+          return;
+        }
+        setPendingOrder(orderRow);
       });
     },
     [
@@ -791,13 +798,18 @@ export function useAccount(accountId: string) {
     ],
   );
 
+  // P-3 U10
   const cancelPendingOrder = useCallback(async () => {
     await withLock(mutationLock, async () => {
-      if (!pendingOrder) return;
-      await supabase.from("pending_orders").delete().eq("id", pendingOrder.id);
-      setPendingOrder(null);
+      if (!pendingOrder || !account) return;
+      const { error } = await supabase.rpc("cancel_pending_order", {
+        p_account_id: account.id,
+        p_order_id: pendingOrder.id,
+      });
+      if (error) setOrderError(error.message);
+      else setPendingOrder(null);
     });
-  }, [pendingOrder, supabase]);
+  }, [pendingOrder, account, supabase]);
 
   /* ── Update SL/TP on open equity position ── */
   const updatePositionRisk = useCallback(
@@ -806,6 +818,8 @@ export function useAccount(accountId: string) {
       takeProfit?: number | null;
     }) => {
       await withLock(mutationLock, async () => {
+        // copilot ne bola hai yeh
+        if (!account) return;
         const equityPos = positions.find((p) => p.instrument_type === "equity");
         if (!equityPos) return;
 
@@ -851,7 +865,12 @@ export function useAccount(accountId: string) {
         }
 
         setOrderError(null);
-        await supabase.from("positions").update(patch).eq("id", equityPos.id);
+        await supabase.rpc("update_position_risk", {
+          p_account_id: account.id, // account is possibly null
+          p_position_id: equityPos.id,
+          p_stop_loss: patch.stop_loss_price ?? null,
+          p_take_profit: patch.take_profit_price ?? null,
+        });
         setPositions((prev) =>
           prev.map((p) => (p.id === equityPos.id ? { ...p, ...patch } : p)),
         );

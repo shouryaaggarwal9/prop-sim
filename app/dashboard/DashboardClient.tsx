@@ -9,6 +9,8 @@ import type { Account } from "@/lib/trading/types";
 
 const STARTING_BALANCE = 50000;
 
+// git add RR7
+
 const STATUS_STYLES: Record<Account["status"], string> = {
   active: "bg-accent/15 text-accent",
   passed: "bg-success/15 text-success",
@@ -31,29 +33,17 @@ export default function DashboardClient({
     setError(null);
     try {
       const supabase = getSupabaseClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
 
-      const { data, error: insErr } = await supabase
-        .from("accounts")
-        .insert({
-          user_id: user!.id,
-          symbol: "SPY",
-          epoch: selectedEpoch,
-          starting_balance: STARTING_BALANCE,
-          balance: STARTING_BALANCE,
-          peak_equity: STARTING_BALANCE,
-          day_start_equity: STARTING_BALANCE,
-          status: "active",
-          phase: "evaluation",
-        })
-        .select()
-        .single();
+      // P3: server mints the account (ownership derived from the session,
+      // balance enforced server-side). Returns the full row.
+      const { data, error: rpcErr } = await supabase.rpc("create_evaluation", {
+        p_epoch: selectedEpoch,
+      });
+      if (rpcErr) throw rpcErr;
 
-      if (insErr) throw insErr;
-      setAccounts((prev) => [data as Account, ...prev]);
-      router.push(`/trade/${(data as Account).id}`);
+      const account = (data as Account[])[0];
+      setAccounts((prev) => [account, ...prev]);
+      router.push(`/trade/${account.id}`);
     } catch (err) {
       setError(
         err instanceof Error
