@@ -3,8 +3,7 @@
 import { redirect } from "next/navigation";
 import { stripe } from "@/lib/stripe";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-
-const EVALUATION_FEE_CENTS = 10000; // $100.00 — change to whatever you want
+import { EVALUATION_FEE_CENTS } from "@/lib/constants";
 
 export async function createCheckoutSession(accountId: string) {
   const supabase = await getSupabaseServerClient();

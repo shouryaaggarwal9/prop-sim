@@ -627,11 +627,10 @@ export function useAccount(accountId: string) {
 
     if (triggered) {
       withLock(mutationLock, async () => {
-        // MG-10
-        await supabase
-          .from("pending_orders")
-          .delete()
-          .eq("id", pendingOrder.id);
+        await supabase.rpc("cancel_pending_order", {
+          p_account_id: account.id,
+          p_order_id: pendingOrder.id,
+        });
         setPendingOrder(null);
         const funds = quoteFunds(
           availableCash,

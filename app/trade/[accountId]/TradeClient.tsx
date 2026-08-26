@@ -12,6 +12,7 @@ import { createCheckoutSession } from "@/app/actions/payments";
 import PortfolioGreeksPanel from "./PortfolioGreeksPanel";
 import { useEffect, useMemo } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
+import { EVALUATION_FEE_CENTS, formatUsd } from "@/lib/constants";
 
 export default function TradeClient({ accountId }: { accountId: string }) {
   // MG-16
@@ -95,8 +96,12 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             Your evaluation is complete. Activate your funded account to start
             trading with real risk rules.
           </p>
-          <div className="text-3xl font-bold">$100.00</div>
-          <p className="text-xs text-muted">One-time evaluation fee</p>
+          <div className="text-3xl font-bold">
+            {formatUsd(EVALUATION_FEE_CENTS)}
+          </div>
+          <p className="text-xs text-muted">
+            One-time evaluation fee — {formatUsd(EVALUATION_FEE_CENTS)}
+          </p>
 
           {paymentSuccess && (
             <p className="text-sm text-success">
