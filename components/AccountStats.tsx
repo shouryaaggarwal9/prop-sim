@@ -1,4 +1,4 @@
-import type { Account } from "@/lib/trading/types";
+import type { Account, Trade } from "@/lib/trading/types";
 
 const STATUS_STYLES: Record<Account["status"], string> = {
   active: "bg-accent/15 text-accent",
@@ -17,6 +17,7 @@ export default function AccountStats({
   currentPrice,
   reserved,
   availableCash,
+  trades = [],
 }: {
   account: Account;
   equity: number;
@@ -24,9 +25,12 @@ export default function AccountStats({
   currentPrice: number;
   reserved: number;
   availableCash: number;
+  trades?: Trade[];
 }) {
   const dailyPnL = equity - account.day_start_equity;
-  const totalPnL = equity - account.starting_balance;
+  // const totalPnL = equity - account.starting_balance;
+
+  const totalPnL = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
 
   return (
     <div className="card p-4 space-y-3">

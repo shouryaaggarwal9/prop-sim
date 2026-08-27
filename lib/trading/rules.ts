@@ -13,12 +13,23 @@ export interface RuleThresholds {
 
 /** Thresholds are intentionally unremarkable — the point of this project is the
  *  engine, not the exact numbers. Loosely modeled on real prop-firm evaluations. */
+
+// this is the "real" ruleset, but it's too strict for testing — you have to trade for a while to pass, and you can fail in a single day. Use the test rules below instead.
+
 export const DEFAULT_RULES: RuleThresholds = {
   profitTargetPct: 0.06, // 6% profit target
   dailyLossPct: 0.03,
   trailingDrawdownPct: 0.06,
   consistencyPct: 0.4, // 40% of total profit may be concentrated in a single day
 };
+
+// only for testing, so you can pass in a single trade and see the account pass/fail immediately
+// export const DEFAULT_RULES: RuleThresholds = {
+//   profitTargetPct: 0.001, // 0.1% target ($50 on $50,000) -> 1 small trade hits the target
+//   dailyLossPct: 0.2, // 20% cushion so you don't fail by accident
+//   trailingDrawdownPct: 0.2, // 20% drawdown cushion
+//   consistencyPct: 1.0, // 100% consistency allows passing on Day 1 in a single trade
+// };
 
 export interface RuleCheckInput {
   startingBalance: number;

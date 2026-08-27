@@ -170,6 +170,7 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             currentPrice={currentPrice}
             reserved={reserved}
             availableCash={availableCash}
+            trades={trades}
           />
           <RuleStatusBar
             account={account}
