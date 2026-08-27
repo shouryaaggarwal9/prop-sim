@@ -1,3 +1,80 @@
+/* ── Pending order trigger ── */
+  useEffect(() => {
+    if (
+      !account ||
+      account.status !== "active" ||
+      !pendingOrder ||
+      positions.length > 0
+    )
+      return;
+
+    const {
+      side,
+      order_type,
+      trigger_price,
+      stop_loss_price,
+      take_profit_price,
+    } = pendingOrder;
+
+    const triggered =
+      order_type === "limit"
+        ? side === "long"
+          ? currentPrice <= trigger_price
+          : currentPrice >= trigger_price
+        : side === "long"
+          ? currentPrice >= trigger_price
+          : currentPrice <= trigger_price;
+
+    if (triggered) {
+      withLock(mutationLock, async () => {
+        // P3-U8: RPC replaces direct table delete (lockdown compliant)
+        await supabase.rpc("cancel_pending_order", {
+          p_account_id: account.id,
+          p_order_id: pendingOrder.id,
+        });
+        setPendingOrder(null);
+
+        // MG-10: C5 margin gate re-check at fill time
+        const funds = quoteFunds(
+          availableCash,
+          [
+            {
+              instrument_type: "equity",
+              side,
+              quantity: pendingOrder.quantity,
+              entry_price: trigger_price,
+            },
+          ],
+          account.leverage,
+        );
+
+        if (!funds.affordable) {
+          setOrderError(
+            funds.error ??
+              "Pending order cancelled — insufficient funds at trigger.",
+          );
+          return;
+        }
+
+        // UA-6 & P3: carries SL/TP through to fillPositions (apply_fill RPC)
+        await fillPositions([
+          {
+            instrument_type: "equity",
+            side,
+            quantity: pendingOrder.quantity,
+            entry_price: trigger_price,
+            stop_loss_price: stop_loss_price ?? null,
+            take_profit_price: take_profit_price ?? null,
+          },
+        ]);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPrice, availableCash]);
+
+
+
+
 -- accounts:
   constraint accounts_user_id_fkey foreign key (user_id) references auth.users(id) on delete cascade,
   constraint accounts_source_account_id_fkey foreign key (source_account_id) references public.accounts(id)
