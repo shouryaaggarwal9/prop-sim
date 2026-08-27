@@ -15,6 +15,7 @@ export async function signUp(formData: FormData) {
     options: {
       emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
     },
+    
   });
 
   if (error) return { error: error.message };

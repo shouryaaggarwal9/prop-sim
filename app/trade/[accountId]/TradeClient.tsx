@@ -13,6 +13,7 @@ import PortfolioGreeksPanel from "./PortfolioGreeksPanel";
 import { useEffect, useMemo } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { EVALUATION_FEE_CENTS, formatUsd } from "@/lib/constants";
+import WithdrawalPanel from "./WithdrawalPanel";
 
 export default function TradeClient({ accountId }: { accountId: string }) {
   // MG-16
@@ -195,6 +196,14 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             leverage={account.leverage}
           />
           <PortfolioGreeksPanel greeks={portfolioGreeks} />
+          {account.phase === "funded" && (
+            <WithdrawalPanel
+              account={account}
+              onWithdrawalComplete={async () => {
+                window.location.reload();
+              }}
+            />
+          )}
           {isReplayDone && (
             <p className="text-xs text-muted">
               This account has used all of its simulated price history — trading
