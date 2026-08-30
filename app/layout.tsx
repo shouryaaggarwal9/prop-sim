@@ -1,11 +1,24 @@
 import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
 
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "PropSim — simulated prop-firm evaluation",
+  title: "PropSim — Quantitative Simulation & Execution Engine",
   description:
-    "A simulated prop-trading evaluation: profit target, daily loss limit, and trailing drawdown rules, played out against a live-replayed synthetic market.",
+    "Simulated prop-trading evaluation featuring deterministic replay epochs, options chains, and institutional risk metrics.",
 };
 
 export default function RootLayout({
@@ -14,10 +27,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="flex min-h-screen flex-col bg-[#0a0a0a] text-white antialiased">
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
+      <body className="flex min-h-screen flex-col font-sans bg-bg text-text antialiased selection:bg-indigo-500/30 selection:text-indigo-200">
         <Navbar />
-        <main className="flex flex-1 flex-col">{children}</main>
+        <main className="flex flex-1 flex-col relative z-10">{children}</main>
       </body>
     </html>
   );

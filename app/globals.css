@@ -1,49 +1,107 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0a0a0c;
-  --color-surface: #121216;
-  --color-surface-2: #1a1a20;
-  --color-border: #26262e;
+  --color-bg: #070709;
+  --color-surface: #0e0e12;
+  --color-surface-elevated: #14141a;
+  --color-surface-hover: #1c1c24;
+  --color-border: #1e1e27;
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
+  --color-border-glow: rgba(99, 102, 241, 0.25);
+
   --color-accent: #6366f1;
-  --color-success: #22c55e;
-  --color-danger: #ef4444;
+  --color-accent-hover: #4f46e5;
+  --color-success: #10b981;
+  --color-success-dim: rgba(16, 185, 129, 0.12);
+  --color-danger: #f43f5e;
+  --color-danger-dim: rgba(244, 63, 94, 0.12);
   --color-warning: #f59e0b;
-  --color-text: #e4e4e7;
-  --color-muted: #8b8b96;
+
+  --color-text: #f4f4f5;
+  --color-text-secondary: #a1a1aa;
+  --color-muted: #71717a;
+}
+
+:root {
+  color-scheme: dark;
 }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  background-image:
+    radial-gradient(
+      ellipse at 50% 0%,
+      rgba(99, 102, 241, 0.07) 0%,
+      transparent 60%
+    ),
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    32px 32px,
+    32px 32px;
+  background-position:
+    top center,
+    center center,
+    center center;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
 }
 
 @utility card {
-  @apply bg-surface border border-border rounded-2xl;
+  @apply relative rounded-xl border border-border bg-surface/90 backdrop-blur-md shadow-2xl shadow-black/60 transition-all;
+}
+
+@utility card-elevated {
+  @apply card bg-surface-elevated border-border-subtle;
 }
 
 @utility btn {
-  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
-         transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  @apply relative inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-xs font-semibold uppercase tracking-wider
+         transition-all duration-150 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none;
 }
 
 @utility btn-buy {
-  @apply btn bg-success text-black hover:opacity-90;
+  @apply btn bg-emerald-500 text-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-400 hover:shadow-emerald-500/30;
 }
 
 @utility btn-sell {
-  @apply btn bg-danger text-white hover:opacity-90;
+  @apply btn bg-rose-500 text-white shadow-lg shadow-rose-500/20 hover:bg-rose-400 hover:shadow-rose-500/30;
 }
 
 @utility btn-secondary {
-  @apply btn bg-surface-2 border border-border hover:bg-white/5;
+  @apply btn bg-surface-elevated text-text border border-border hover:bg-surface-hover hover:border-white/10;
+}
+
+@utility btn-accent {
+  @apply btn bg-accent text-white shadow-lg shadow-indigo-500/20 hover:bg-accent-hover hover:shadow-indigo-500/30;
 }
 
 @utility input {
-  @apply w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm outline-none
-         focus:ring-2 focus:ring-accent;
+  @apply w-full rounded-lg border border-border bg-surface-elevated px-3 py-2 text-sm text-text
+         placeholder:text-muted transition-all outline-none focus:border-accent focus:ring-1 focus:ring-accent;
 }
 
 @utility badge {
-  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  @apply inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider border;
+}
+
+@utility terminal-panel-header {
+  @apply flex items-center justify-between border-b border-border-subtle px-4 py-2.5 bg-white/1;
 }

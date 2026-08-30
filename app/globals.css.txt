@@ -18,26 +18,34 @@ body {
   color: var(--color-text);
 }
 
-.card {
+@utility card {
   @apply bg-surface border border-border rounded-2xl;
 }
-.btn {
+
+@utility btn {
   @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
          transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
 }
-.btn-buy {
+
+@utility btn-buy {
   @apply btn bg-success text-black hover:opacity-90;
 }
-.btn-sell {
+
+@utility btn-sell {
   @apply btn bg-danger text-white hover:opacity-90;
 }
-.btn-secondary {
+
+@utility btn-secondary {
   @apply btn bg-surface-2 border border-border hover:bg-white/5;
 }
-.input {
+
+@utility input {
   @apply w-full rounded-lg border border-border bg-surface-2 px-3 py-2 text-sm outline-none
          focus:ring-2 focus:ring-accent;
 }
-.badge {
+
+@utility badge {
   @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
 }
+
+

@@ -6,14 +6,15 @@ import { positionPnl, resolveLeg, validateTrigger, mergeById } from "./engine";
 import { getEpoch } from "@/lib/market/epochs";
 import { useMarketReplay } from "@/lib/market/useMarketReplay";
 import { evaluateRules, DEFAULT_RULES } from "./rules";
-import type {
-  Account,
-  Position,
-  Trade,
-  Side,
-  OrderType,
-  PendingOrder,
-  InstrumentType,
+import {
+  isOptionType,
+  type Account,
+  type Position,
+  type Trade,
+  type Side,
+  type OrderType,
+  type PendingOrder,
+  type InstrumentType,
 } from "./types";
 import {
   generateOptionsChain,
@@ -174,9 +175,13 @@ export function useAccount(accountId: string) {
       if (pos.instrument_type === "equity") {
         total += positionPnl(pos, currentPrice);
       } else {
-        const leg = optionsChain
-          ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
+        const optionType = isOptionType(pos.instrument_type)
+          ? pos.instrument_type
           : null;
+        const leg =
+          optionType && optionsChain
+            ? getLegPrice(optionsChain, optionType, pos.strike ?? 0)
+            : null;
         const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
 
         // MG-3
@@ -379,9 +384,13 @@ export function useAccount(accountId: string) {
             pos.strike ?? 0,
           );
         } else {
-          const leg = optionsChain
-            ? getLegPrice(optionsChain, pos.instrument_type, pos.strike ?? 0)
+          const optionType = isOptionType(pos.instrument_type)
+            ? pos.instrument_type
             : null;
+          const leg =
+            optionType && optionsChain
+              ? getLegPrice(optionsChain, optionType, pos.strike ?? 0)
+              : null;
           exitPrice = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
         }
         return { position_id: pos.id, exit_price: exitPrice };

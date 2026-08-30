@@ -5,6 +5,7 @@ import {
   createChart,
   CandlestickSeries,
   ColorType,
+  CrosshairMode,
   type IChartApi,
   type ISeriesApi,
   type UTCTimestamp,
@@ -37,31 +38,67 @@ export default function CandlestickChart({
     if (!container) return;
 
     const chart = createChart(container, {
-      layout: { background: { type: ColorType.Solid, color: "#0a0a0c" }, textColor: "#8b8b96" },
+      layout: {
+        background: { type: ColorType.Solid, color: "transparent" },
+        textColor: "#71717a",
+        fontSize: 11,
+        fontFamily: "var(--font-mono, monospace)",
+      },
       grid: {
-        vertLines: { color: "#1a1a20" },
-        horzLines: { color: "#1a1a20" },
+        vertLines: { color: "rgba(255, 255, 255, 0.03)" },
+        horzLines: { color: "rgba(255, 255, 255, 0.03)" },
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          color: "#6366f1",
+          width: 1,
+          style: 3,
+          labelBackgroundColor: "#1e1e27",
+        },
+        horzLine: {
+          color: "#6366f1",
+          width: 1,
+          style: 3,
+          labelBackgroundColor: "#1e1e27",
+        },
+      },
+      rightPriceScale: {
+        borderColor: "rgba(255, 255, 255, 0.08)",
+        scaleMargins: { top: 0.1, bottom: 0.1 },
+      },
+      timeScale: {
+        borderColor: "rgba(255, 255, 255, 0.08)",
+        timeVisible: true,
+        secondsVisible: false,
       },
       width: container.clientWidth,
-      height: 420,
-      timeScale: { timeVisible: true, secondsVisible: false },
+      height: 440,
     });
+
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#ef4444",
+      upColor: "#10b981",
+      downColor: "#f43f5e",
       borderVisible: false,
-      wickUpColor: "#22c55e",
-      wickDownColor: "#ef4444",
+      wickUpColor: "#10b981",
+      wickDownColor: "#f43f5e",
     });
+
     chartRef.current = chart;
     seriesRef.current = series;
 
-    function handleResize() {
-      if (container) chart.applyOptions({ width: container.clientWidth });
-    }
-    window.addEventListener("resize", handleResize);
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0 && chartRef.current) {
+          chartRef.current.applyOptions({ width: entry.contentRect.width });
+        }
+      }
+    });
+
+    resizeObserver.observe(container);
+
     return () => {
-      window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -69,12 +106,40 @@ export default function CandlestickChart({
   }, []);
 
   useEffect(() => {
-    seriesRef.current?.setData(closedBars.map(toCandle));
+    if (seriesRef.current && closedBars.length > 0) {
+      seriesRef.current.setData(closedBars.map(toCandle));
+    }
   }, [closedBars]);
 
   useEffect(() => {
-    if (formingBar) seriesRef.current?.update(toCandle(formingBar));
+    if (seriesRef.current && formingBar) {
+      seriesRef.current.update(toCandle(formingBar));
+    }
   }, [formingBar]);
 
-  return <div ref={containerRef} className="card p-2" />;
+  const activePrice =
+    formingBar?.close ?? closedBars[closedBars.length - 1]?.close;
+
+  return (
+    <div className="card overflow-hidden">
+      {/* Chart Header Bar */}
+      <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2.5 bg-surface-elevated/40">
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-xs font-bold text-text">SPY</span>
+          <span className="badge border-border bg-surface text-text-secondary text-[10px] font-mono">
+            5M
+          </span>
+          <span className="text-[11px] text-muted">Synthetic Replay</span>
+        </div>
+        {activePrice !== undefined && (
+          <div className="font-mono text-xs font-bold text-text">
+            Mark:{" "}
+            <span className="text-emerald-400">${activePrice.toFixed(2)}</span>
+          </div>
+        )}
+      </div>
+
+      <div ref={containerRef} className="w-full p-1" />
+    </div>
+  );
 }

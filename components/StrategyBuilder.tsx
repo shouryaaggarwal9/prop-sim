@@ -8,14 +8,12 @@ import {
   type StrategyType,
   type StrategyLegInput,
 } from "@/lib/market/strategies";
-// MG-18
 import { quoteFunds, type MarginLeg } from "@/lib/trading/margin";
 
-function StrategyBuilder({
+export default function StrategyBuilder({
   chain,
   onPlaceStrategy,
   disabled,
-  // MG-17
   availableCash,
   leverage,
 }: {
@@ -45,16 +43,12 @@ function StrategyBuilder({
   const scaledLegs = useMemo(
     () => legs.map((l) => ({ ...l, quantity: l.quantity * contracts })),
     [legs, contracts],
-  ); //SB-1
+  );
   const analysis = useMemo(
     () => analyzeStrategy(scaledLegs, chain),
     [scaledLegs, chain],
   );
 
-  //MG-19
-
-  // Price legs with the SAME convention the engine uses (long→ask, short→bid,
-  // type-aware) so displayed funds always match enforcement.
   const pricedLegs: MarginLeg[] = legs.map((l) => {
     if (l.instrument_type === "equity") {
       return { ...l, entry_price: chain.underlyingPrice };
@@ -66,6 +60,7 @@ function StrategyBuilder({
       entry_price: opt ? (l.side === "long" ? opt.ask : opt.bid) : 0,
     };
   });
+
   const funds = useMemo(
     () => quoteFunds(availableCash, pricedLegs, leverage),
     [availableCash, pricedLegs, leverage],
@@ -99,21 +94,36 @@ function StrategyBuilder({
   );
 
   return (
-    <div className="space-y-3">
-      <select
-        className="input w-full"
-        value={selectedType}
-        onChange={(e) => setSelectedType(e.target.value as StrategyType)}
-      >
-        {STRATEGY_CONFIGS.map((c) => (
-          <option key={c.type} value={c.type}>
-            {c.name}
-          </option>
-        ))}
-      </select>
-      <p className="text-xs text-muted">{config.description}</p>
+    <div className="space-y-3 font-mono text-xs">
       <div>
-        <label className="mb-1 block text-xs text-muted">Contracts</label>
+        <label className="mb-1 block text-[10px] uppercase text-muted">
+          Select Strategy Archetype
+        </label>
+        <select
+          className="input w-full font-sans text-xs"
+          value={selectedType}
+          onChange={(e) => setSelectedType(e.target.value as StrategyType)}
+        >
+          {STRATEGY_CONFIGS.map((c) => (
+            <option
+              key={c.type}
+              value={c.type}
+              className="bg-surface text-text"
+            >
+              {c.name} ({c.category.toUpperCase()})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <p className="font-sans text-[11px] leading-relaxed text-text-secondary">
+        {config.description}
+      </p>
+
+      <div>
+        <label className="mb-1 block text-[10px] uppercase text-muted">
+          Contracts Multiplier
+        </label>
         <input
           type="number"
           min={1}
@@ -122,100 +132,130 @@ function StrategyBuilder({
           onChange={(e) => setContracts(Math.max(1, Number(e.target.value)))}
         />
       </div>
-      <div className="space-y-2">
+
+      {/* Leg Configurator */}
+      <div className="space-y-1.5">
+        <label className="block text-[10px] uppercase text-muted">
+          Multi-Leg Configuration
+        </label>
         {legs.map((leg, i) => {
           const found = legIsResolvable(leg, chain);
           return (
             <div
               key={i}
-              className={`flex items-center gap-2 rounded-lg border p-2 ${
+              className={`flex items-center gap-2 rounded-lg border p-2 transition-all ${
                 found
-                  ? "border-white/5 bg-white/2"
-                  : "border-danger/30 bg-danger/5"
+                  ? "border-border-subtle bg-surface-elevated/70"
+                  : "border-rose-500/40 bg-rose-500/10"
               }`}
             >
-              <span className="w-16 text-xs font-medium capitalize">
-                {leg.side}
+              <span
+                className={`badge text-[10px] ${
+                  leg.side === "long"
+                    ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                    : "border-rose-500/20 bg-rose-500/10 text-rose-400"
+                }`}
+              >
+                {leg.side.toUpperCase()}
               </span>
-              <span className="w-12 text-xs text-muted">
+              <span className="text-[11px] font-semibold text-text uppercase">
                 {leg.instrument_type}
               </span>
               {leg.instrument_type !== "equity" && (
-                <input
-                  type="number"
-                  step={2.5}
-                  className={`input w-24 text-xs ${!found ? "border-danger" : ""}`}
-                  value={leg.strike ?? ""}
-                  onChange={(e) =>
-                    updateLeg(i, { strike: Number(e.target.value) })
-                  }
-                />
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-muted">@</span>
+                  <input
+                    type="number"
+                    step={2.5}
+                    className={`input w-20 px-2 py-1 text-xs ${
+                      !found ? "border-rose-500 focus:ring-rose-500" : ""
+                    }`}
+                    value={leg.strike ?? ""}
+                    onChange={(e) =>
+                      updateLeg(i, { strike: Number(e.target.value) })
+                    }
+                  />
+                </div>
               )}
-              <span className="ml-auto text-xs text-muted">
-                x{leg.quantity}
+              <span className="ml-auto text-[11px] text-muted">
+                ×{leg.quantity * contracts}
               </span>
             </div>
           );
         })}
       </div>
+
       {missingLegs.length > 0 && (
-        <p className="text-xs text-danger">
-          {missingLegs.length} leg(s) not found in chain. Adjust strikes.
+        <p className="rounded-md border border-rose-500/20 bg-rose-500/10 p-2 text-[11px] text-rose-400">
+          {missingLegs.length} leg strike(s) unlisted in 0DTE chain. Adjust
+          strike prices.
         </p>
       )}
-      {/* MG-20 */}
+
       {!funds.affordable && funds.error && (
-        <p className="text-xs text-danger">{funds.error}</p>
+        <p className="rounded-md border border-rose-500/20 bg-rose-500/10 p-2 text-[11px] text-rose-400">
+          {funds.error}
+        </p>
       )}
-      .
-      <div className="rounded-lg border border-white/5 bg-white/2 p-3 text-xs space-y-1">
+
+      {/* Analytical Payoff Matrix */}
+      <div className="rounded-xl border border-border-subtle bg-surface-elevated/60 p-3 space-y-1.5 font-mono text-[11px]">
         <div className="flex justify-between">
           <span className="text-muted">
             Net {analysis.netDebit >= 0 ? "Debit" : "Credit"}
           </span>
-          <span>${Math.abs(analysis.netDebit).toFixed(2)}</span>
+          <span className="font-bold text-text">
+            ${Math.abs(analysis.netDebit).toFixed(2)}
+          </span>
         </div>
         <div className="flex justify-between">
           <span className="text-muted">Max Profit</span>
-          <span className="text-success">${analysis.maxProfit.toFixed(2)}</span>
+          <span className="font-bold text-emerald-400">
+            ${analysis.maxProfit.toFixed(2)}
+          </span>
         </div>
         <div className="flex justify-between">
           <span className="text-muted">Max Loss</span>
-          <span className="text-danger">${analysis.maxLoss.toFixed(2)}</span>
-        </div>
-        <div className="flex justify-between">
-          {/* MG-20 */}
-          <span className="text-muted">
-            Reserved → ${funds.reservation.toFixed(2)}
+          <span className="font-bold text-rose-400">
+            ${analysis.maxLoss.toFixed(2)}
           </span>
-          <span className="text-muted">
-            Upfront → {funds.upfront >= 0 ? "+" : "-"}$
+        </div>
+        <div className="flex justify-between border-t border-border-subtle pt-1 text-[10px] text-muted">
+          <span>Margin Reserve: ${funds.reservation.toFixed(2)}</span>
+          <span>
+            Cash Delta: {funds.upfront >= 0 ? "+" : "-"}$
             {Math.abs(funds.upfront).toFixed(2)}
           </span>
         </div>
         {cleanBreakevens.length > 0 && (
-          <div className="flex justify-between">
+          <div className="flex justify-between text-text-secondary">
             <span className="text-muted">Breakeven</span>
-            <span>{cleanBreakevens.map((b) => b.toFixed(2)).join(", ")}</span>
+            <span>
+              {cleanBreakevens.map((b) => `$${b.toFixed(2)}`).join(" | ")}
+            </span>
           </div>
         )}
-        <div className="border-t border-white/5 pt-1 flex justify-between">
-          <span className="text-muted">Δ</span>
-          <span>{analysis.greeks.delta.toFixed(2)}</span>
+        <div className="flex justify-between text-text-secondary">
+          <span className="text-muted">Net Delta (Δ)</span>
+          <span
+            className={
+              analysis.greeks.delta >= 0 ? "text-emerald-400" : "text-rose-400"
+            }
+          >
+            {analysis.greeks.delta >= 0 ? "+" : ""}
+            {analysis.greeks.delta.toFixed(2)}
+          </span>
         </div>
       </div>
+
       <button
-        className={
-          config.category === "credit" ? "btn-sell w-full" : "btn-buy w-full"
-        }
-        // MG-20
+        type="button"
+        className={`w-full py-2.5 ${config.category === "credit" ? "btn-sell" : "btn-buy"}`}
         disabled={disabled || busy || !isValid || !funds.affordable}
         onClick={handleSubmit}
       >
-        {busy ? "Executing..." : `Place ${config.name}`}
+        {busy ? "Executing Strategy..." : `Execute ${config.name}`}
       </button>
     </div>
   );
 }
-
-export default StrategyBuilder;

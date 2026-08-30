@@ -4,35 +4,63 @@ export default function PortfolioGreeksPanel({
   greeks: { delta: number; gamma: number; theta: number; vega: number };
 }) {
   return (
-    <div className="card space-y-2 p-4">
-      <h3 className="text-sm font-medium">Portfolio Greeks</h3>
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        <div>
-          <p className="text-xs text-muted">Delta</p>
-          <p className={greeks.delta >= 0 ? "text-success" : "text-danger"}>
+    <div className="card space-y-3 p-4">
+      <div className="flex items-center justify-between border-b border-border-subtle pb-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-text font-mono">
+          Portfolio Greeks
+        </h3>
+        <span className="badge border-accent/20 bg-accent/10 text-accent font-mono text-[10px]">
+          Live Net Risk
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 font-mono">
+        <div className="rounded-lg border border-border-subtle bg-surface-elevated/70 p-2.5">
+          <p className="text-[10px] uppercase text-muted">Delta (Δ)</p>
+          <p
+            className={`text-sm font-bold ${
+              greeks.delta >= 0 ? "text-emerald-400" : "text-rose-400"
+            }`}
+          >
             {greeks.delta >= 0 ? "+" : ""}
-            {greeks.delta.toFixed(0)}
+            {greeks.delta.toFixed(2)}
           </p>
         </div>
-        <div>
-          <p className="text-xs text-muted">Gamma</p>
-          <p>{greeks.gamma.toFixed(2)}</p>
+
+        <div className="rounded-lg border border-border-subtle bg-surface-elevated/70 p-2.5">
+          <p className="text-[10px] uppercase text-muted">Gamma (Γ)</p>
+          <p className="text-sm font-bold text-text">
+            {greeks.gamma.toFixed(4)}
+          </p>
         </div>
-        <div>
-          <p className="text-xs text-muted">Theta</p>
-          <p className={greeks.theta >= 0 ? "text-success" : "text-danger"}>
+
+        <div className="rounded-lg border border-border-subtle bg-surface-elevated/70 p-2.5">
+          <p className="text-[10px] uppercase text-muted">Theta (Θ / Day)</p>
+          <p
+            className={`text-sm font-bold ${
+              greeks.theta >= 0 ? "text-emerald-400" : "text-rose-400"
+            }`}
+          >
             {greeks.theta >= 0 ? "+" : ""}
-            {greeks.theta.toFixed(0)}/day
+            {greeks.theta.toFixed(2)}
           </p>
         </div>
-        <div>
-          <p className="text-xs text-muted">Vega</p>
-          <p>{greeks.vega.toFixed(0)}</p>
+
+        <div className="rounded-lg border border-border-subtle bg-surface-elevated/70 p-2.5">
+          <p className="text-[10px] uppercase text-muted">Vega (ν)</p>
+          <p className="text-sm font-bold text-text">
+            {greeks.vega.toFixed(2)}
+          </p>
         </div>
       </div>
-      <p className="text-[10px] text-muted">
-        Delta ≈ {Math.round(greeks.delta)} shares of SPY exposure
-      </p>
+
+      <div className="rounded-lg border border-white/5 bg-white/1 px-2.5 py-1.5 font-mono text-[10px] text-muted">
+        Net Delta ≈{" "}
+        <span className="text-text font-semibold">
+          {Math.round(greeks.delta)}
+        </span>{" "}
+        SPY share equiv.
+      </div>
     </div>
   );
 }

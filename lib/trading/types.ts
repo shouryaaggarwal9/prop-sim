@@ -4,7 +4,16 @@ export type Side = "long" | "short";
 export type AccountPhase = "evaluation" | "funded";
 export type OrderType = "market" | "limit" | "stop";
 export type InstrumentType = "equity" | "call" | "put";
+export type OptionType = "call" | "put";
 export type PaymentStatus = "not_required" | "pending" | "paid" | "failed";
+
+export function isOptionType(value: InstrumentType): value is OptionType {
+  return value === "call" || value === "put";
+}
+
+export function isEquityType(value: InstrumentType): value is "equity" {
+  return value === "equity";
+}
 
 export interface Account {
   id: string;

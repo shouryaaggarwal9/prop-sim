@@ -315,9 +315,11 @@ export function updateChainPrices(
 
 export function getLegPrice(
   chain: OptionsChain,
-  type: "call" | "put",
+  type: "equity" | "call" | "put",
   strike: number,
 ): OptionLeg | undefined {
+  if (type === "equity") return undefined;
+
   const legs = type === "call" ? chain.calls : chain.puts;
   return legs.find((l) => Math.abs(l.strike - strike) < 0.01);
 }
