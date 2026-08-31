@@ -11,6 +11,8 @@ export default function WithdrawalPanel({
   account: Account;
   onWithdrawalComplete?: () => Promise<void>;
 }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [amount, setAmount] = useState<number | "">("");
   const [history, setHistory] = useState<Withdrawal[]>([]);
   const [loading, setLoading] = useState(false);
@@ -71,95 +73,169 @@ export default function WithdrawalPanel({
   }
 
   return (
-    <div className="card space-y-4 p-4">
-      <div className="flex items-center justify-between border-b border-white/5 pb-2">
-        <h3 className="text-sm font-medium">Payout Desk</h3>
-        <span className="rounded bg-success/10 px-2 py-0.5 text-xs text-success">
-          Simulated
-        </span>
-      </div>
-
-      <div className="rounded-lg border border-white/5 bg-white/2 p-3 text-xs space-y-1">
-        <div className="flex justify-between">
-          <span className="text-muted">Account Balance:</span>
-          <span>${account.balance.toFixed(2)}</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted">Starting Capital:</span>
-          <span>${account.starting_balance.toFixed(2)}</span>
-        </div>
-        <div className="flex justify-between font-medium border-t border-white/5 pt-1">
-          <span className="text-muted">Withdrawable Profit:</span>
+    <div className="rounded-xl border border-border-subtle bg-surface-elevated/40">
+      {/* ── Main Panel Header (Toggle) ── */}
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="flex w-full items-center justify-between p-3.5 text-left transition-colors hover:bg-white/2"
+      >
+        <div className="flex items-center gap-2.5">
           <span
-            className={withdrawableProfit > 0 ? "text-success" : "text-muted"}
+            className={`text-xs text-muted transition-transform duration-200 ${
+              isOpen ? "rotate-90" : ""
+            }`}
+          >
+            ▶
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-text font-mono">
+            Payout Desk
+          </span>
+          <span className="badge border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-mono text-[10px]">
+            Simulated
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 text-xs font-mono">
+          <span className="text-muted">Withdrawable:</span>
+          <span
+            className={`font-bold ${
+              withdrawableProfit > 0
+                ? "text-emerald-400"
+                : "text-text-secondary"
+            }`}
           >
             ${withdrawableProfit.toFixed(2)}
           </span>
         </div>
-      </div>
+      </button>
 
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <label className="text-xs text-muted">Amount ($)</label>
-            {withdrawableProfit > 0 && (
+      {/* ── Collapsible Body ── */}
+      {isOpen && (
+        <div className="space-y-4 border-t border-border-subtle p-4 font-mono text-xs">
+          <div className="rounded-lg border border-border-subtle bg-surface-elevated/80 p-3 space-y-1.5">
+            <div className="flex justify-between">
+              <span className="text-muted">Account Balance:</span>
+              <span className="text-text">${account.balance.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">Starting Capital:</span>
+              <span className="text-text-secondary">
+                ${account.starting_balance.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between font-semibold border-t border-border-subtle pt-1.5">
+              <span className="text-muted">Withdrawable Profit:</span>
+              <span
+                className={
+                  withdrawableProfit > 0 ? "text-emerald-400" : "text-muted"
+                }
+              >
+                ${withdrawableProfit.toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <label className="text-[10px] uppercase text-muted">
+                  Amount ($)
+                </label>
+                {withdrawableProfit > 0 && (
+                  <button
+                    type="button"
+                    className="text-[11px] text-accent hover:underline"
+                    onClick={() => setAmount(withdrawableProfit)}
+                  >
+                    Max: ${withdrawableProfit.toFixed(2)}
+                  </button>
+                )}
+              </div>
+              <input
+                type="number"
+                min={0.01}
+                max={withdrawableProfit}
+                step={0.01}
+                className="input text-xs"
+                placeholder="0.00"
+                value={amount}
+                onChange={(e) =>
+                  setAmount(e.target.value === "" ? "" : Number(e.target.value))
+                }
+                disabled={loading || withdrawableProfit <= 0}
+              />
+            </div>
+
+            {error && (
+              <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-[11px] text-rose-400">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-2 text-[11px] text-emerald-400">
+                {success}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="btn-buy w-full py-2.5 text-xs font-bold"
+              disabled={loading || withdrawableProfit <= 0 || !amount}
+            >
+              {loading ? "Processing Payout..." : "Request Payout"}
+            </button>
+          </form>
+
+          {/* ── Collapsible Payout History ── */}
+          {history.length > 0 && (
+            <div className="rounded-lg border border-border-subtle bg-surface-elevated/40">
               <button
                 type="button"
-                className="text-xs text-accent hover:underline"
-                onClick={() => setAmount(withdrawableProfit)}
+                onClick={() => setIsHistoryOpen((prev) => !prev)}
+                className="flex w-full items-center justify-between p-2.5 text-left transition-colors hover:bg-white/2"
               >
-                Max: ${withdrawableProfit.toFixed(2)}
-              </button>
-            )}
-          </div>
-          <input
-            type="number"
-            min={0.01}
-            max={withdrawableProfit}
-            step={0.01}
-            className="input w-full"
-            placeholder="0.00"
-            value={amount}
-            onChange={(e) =>
-              setAmount(e.target.value === "" ? "" : Number(e.target.value))
-            }
-            disabled={loading || withdrawableProfit <= 0}
-          />
-        </div>
-
-        {error && <p className="text-xs text-danger">{error}</p>}
-        {success && <p className="text-xs text-success">{success}</p>}
-
-        <button
-          type="submit"
-          className="btn-buy w-full"
-          disabled={loading || withdrawableProfit <= 0 || !amount}
-        >
-          {loading ? "Processing..." : "Request Payout"}
-        </button>
-      </form>
-
-      {history.length > 0 && (
-        <div className="space-y-2 border-t border-white/5 pt-3">
-          <h4 className="text-xs font-medium text-muted">Payout History</h4>
-          <div className="max-h-36 overflow-y-auto space-y-1">
-            {history.map((w) => (
-              <div
-                key={w.id}
-                className="flex items-center justify-between rounded bg-white/2 px-2 py-1.5 text-xs"
-              >
-                <div>
-                  <span className="font-medium">${w.amount.toFixed(2)}</span>
-                  <p className="text-[10px] text-muted">
-                    {new Date(w.created_at).toLocaleDateString()}
-                  </p>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[10px] text-muted transition-transform duration-200 ${
+                      isHistoryOpen ? "rotate-90" : ""
+                    }`}
+                  >
+                    ▶
+                  </span>
+                  <span className="text-[11px] font-semibold text-text-secondary uppercase tracking-wider">
+                    Payout History ({history.length})
+                  </span>
                 </div>
-                <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-success capitalize">
-                  {w.status}
+                <span className="text-[10px] text-muted">
+                  {isHistoryOpen ? "Hide" : "Show"}
                 </span>
-              </div>
-            ))}
-          </div>
+              </button>
+
+              {isHistoryOpen && (
+                <div className="max-h-40 overflow-y-auto border-t border-border-subtle p-2 space-y-1.5">
+                  {history.map((w) => (
+                    <div
+                      key={w.id}
+                      className="flex items-center justify-between rounded bg-surface px-2.5 py-1.5 text-[11px]"
+                    >
+                      <div>
+                        <span className="font-semibold text-text">
+                          ${w.amount.toFixed(2)}
+                        </span>
+                        <p className="text-[10px] text-muted">
+                          {new Date(w.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <span className="badge border-emerald-500/20 bg-emerald-500/10 text-emerald-400 text-[10px] capitalize">
+                        {w.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

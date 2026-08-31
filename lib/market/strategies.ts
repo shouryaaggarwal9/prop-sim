@@ -1,5 +1,4 @@
-// import type { OptionsChain, OptionLeg } from "./options";
-import { getLegPrice, type OptionsChain, type OptionLeg } from "./options";
+import { getLegPrice, type OptionsChain } from "./options";
 
 export type StrategyType =
   | "bull_call_spread"
@@ -29,8 +28,7 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
   {
     type: "bull_call_spread",
     name: "Bull Call Spread",
-    description:
-      "Long lower call, short higher call. Limited risk, limited reward.",
+    description: "Long ATM call, short OTM call. Defined-risk upside.",
     category: "debit",
     defaultLegs: (atm, step) => [
       { instrument_type: "call", side: "long", strike: atm, quantity: 1 },
@@ -45,7 +43,7 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
   {
     type: "bear_put_spread",
     name: "Bear Put Spread",
-    description: "Long higher put, short lower put. Bearish with defined risk.",
+    description: "Long ATM put, short OTM put. Defined-risk downside.",
     category: "debit",
     defaultLegs: (atm, step) => [
       { instrument_type: "put", side: "long", strike: atm, quantity: 1 },
@@ -60,14 +58,20 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
   {
     type: "bull_put_spread",
     name: "Bull Put Spread",
-    description: "Short higher put, long lower put. Collect premium, bullish.",
+    description:
+      "Short OTM put, long lower put. Collect premium, bullish skew.",
     category: "credit",
     defaultLegs: (atm, step) => [
-      { instrument_type: "put", side: "short", strike: atm, quantity: 1 },
+      {
+        instrument_type: "put",
+        side: "short",
+        strike: atm - step,
+        quantity: 1,
+      },
       {
         instrument_type: "put",
         side: "long",
-        strike: atm - step * 2,
+        strike: atm - step * 3,
         quantity: 1,
       },
     ],
@@ -76,36 +80,9 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
     type: "bear_call_spread",
     name: "Bear Call Spread",
     description:
-      "Short lower call, long higher call. Collect premium, bearish.",
+      "Short OTM call, long higher call. Collect premium, bearish skew.",
     category: "credit",
     defaultLegs: (atm, step) => [
-      { instrument_type: "call", side: "short", strike: atm, quantity: 1 },
-      {
-        instrument_type: "call",
-        side: "long",
-        strike: atm + step * 2,
-        quantity: 1,
-      },
-    ],
-  },
-  {
-    type: "iron_condor",
-    name: "Iron Condor",
-    description: "Short strangle with long wings. Profit from low volatility.",
-    category: "credit",
-    defaultLegs: (atm, step) => [
-      {
-        instrument_type: "put",
-        side: "long",
-        strike: atm - step * 3,
-        quantity: 1,
-      },
-      {
-        instrument_type: "put",
-        side: "short",
-        strike: atm - step,
-        quantity: 1,
-      },
       {
         instrument_type: "call",
         side: "short",
@@ -121,16 +98,49 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
     ],
   },
   {
+    type: "iron_condor",
+    name: "Iron Condor",
+    description:
+      "Short OTM strangle with long wings. Range-bound theta harvest.",
+    category: "credit",
+    defaultLegs: (atm, step) => [
+      {
+        instrument_type: "put",
+        side: "long",
+        strike: atm - step * 4,
+        quantity: 1,
+      },
+      {
+        instrument_type: "put",
+        side: "short",
+        strike: atm - step * 2,
+        quantity: 1,
+      },
+      {
+        instrument_type: "call",
+        side: "short",
+        strike: atm + step * 2,
+        quantity: 1,
+      },
+      {
+        instrument_type: "call",
+        side: "long",
+        strike: atm + step * 4,
+        quantity: 1,
+      },
+    ],
+  },
+  {
     type: "covered_call",
     name: "Covered Call",
-    description: "Long equity, short OTM call. Income strategy.",
+    description: "Long 100 shares, short OTM call. Income overlay.",
     category: "hedged",
     defaultLegs: (atm, step) => [
       { instrument_type: "equity", side: "long", quantity: 100 },
       {
         instrument_type: "call",
         side: "short",
-        strike: atm + step,
+        strike: atm + step * 2,
         quantity: 1,
       },
     ],
@@ -138,17 +148,22 @@ export const STRATEGY_CONFIGS: StrategyConfig[] = [
   {
     type: "protective_put",
     name: "Protective Put",
-    description: "Long equity, long put. Insurance strategy.",
+    description: "Long 100 shares, long OTM put. Downside insurance.",
     category: "hedged",
     defaultLegs: (atm, step) => [
       { instrument_type: "equity", side: "long", quantity: 100 },
-      { instrument_type: "put", side: "long", strike: atm - step, quantity: 1 },
+      {
+        instrument_type: "put",
+        side: "long",
+        strike: atm - step * 2,
+        quantity: 1,
+      },
     ],
   },
 ];
 
 export interface StrategyAnalysis {
-  netDebit: number; // positive = debit paid, negative = credit received
+  netDebit: number;
   maxProfit: number;
   maxLoss: number;
   breakevens: number[];
@@ -171,10 +186,9 @@ export function analyzeStrategy(
   let theta = 0;
   let vega = 0;
 
-  // Track all key strike boundaries for exact expiration payoff evaluation
   const keyPrices = new Set<number>([
-    chain.underlyingPrice * 0.85,
-    chain.underlyingPrice * 1.15,
+    chain.underlyingPrice * 0.9,
+    chain.underlyingPrice * 1.1,
   ]);
 
   for (const leg of legs) {
@@ -195,7 +209,6 @@ export function analyzeStrategy(
 
     if (leg.strike) keyPrices.add(leg.strike);
 
-    // Long pays Ask, Short receives Bid
     const executionPrice = leg.side === "long" ? opt.ask : opt.bid;
     const mult = leg.quantity * 100;
 
@@ -216,25 +229,21 @@ export function analyzeStrategy(
 
   netDebit = Math.round(netDebit * 100) / 100;
 
-  // Margin Calculations
   let marginRequired = 0;
   const isCredit = netDebit < 0;
   const calls = legs.filter((l) => l.instrument_type === "call");
   const puts = legs.filter((l) => l.instrument_type === "put");
 
   if (legs.some((l) => l.instrument_type === "equity")) {
-    // netDebit already includes the equity cost from the loop above
     marginRequired = Math.max(0, netDebit);
   } else if (calls.length === 2 && puts.length === 2) {
-    // Iron Condor: Max risk is the widest wing * 100 * quantity, minus the net credit received
     const callWidth = Math.abs((calls[0].strike ?? 0) - (calls[1].strike ?? 0));
     const putWidth = Math.abs((puts[0].strike ?? 0) - (puts[1].strike ?? 0));
     const maxWingWidth = Math.max(callWidth, putWidth);
-    const qty = Math.max(calls[0].quantity, puts[0].quantity); // Use the largest leg quantity
+    const qty = Math.max(calls[0].quantity, puts[0].quantity);
 
     marginRequired = maxWingWidth * 100 * qty - Math.abs(netDebit);
   } else if (calls.length === 2 || puts.length === 2) {
-    // Spreads: Risk is width * 100 * quantity minus credit (if short), or just net debit (if long)
     const opts = calls.length === 2 ? calls : puts;
     const width = Math.abs((opts[0].strike ?? 0) - (opts[1].strike ?? 0));
     const qty = opts[0].quantity;
@@ -243,13 +252,11 @@ export function analyzeStrategy(
       ? width * 100 * qty - Math.abs(netDebit)
       : netDebit;
   } else {
-    // Naked Long Options: Margin is strictly the premium paid
     marginRequired = Math.max(0, netDebit);
   }
 
   marginRequired = Math.max(0, Math.round(marginRequired * 100) / 100);
 
-  // Exact Expiration Payoff Curve Across All Strikes
   const sortedPrices = Array.from(keyPrices).sort((a, b) => a - b);
   const testPrices: number[] = [];
 
@@ -274,14 +281,12 @@ export function analyzeStrategy(
         terminalValue += Math.max(0, (leg.strike ?? 0) - spot) * mult * dir;
       }
     }
-    // Net P&L = Terminal Value - Net Debit Paid
     return terminalValue - netDebit;
   });
 
   const maxProfit = Math.round(Math.max(...pnls) * 100) / 100;
   const maxLoss = Math.round(Math.abs(Math.min(...pnls)) * 100) / 100;
 
-  // Breakeven Point Detection
   const breakevens: number[] = [];
   for (let i = 0; i < pnls.length - 1; i++) {
     if (

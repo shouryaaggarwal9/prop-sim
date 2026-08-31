@@ -8,7 +8,6 @@ import RuleStatusBar from "@/components/RuleStatusBar";
 import OrderPanel from "@/components/OrderPanel";
 import BottomDock from "@/components/BottomDock";
 import { createCheckoutSession } from "@/app/actions/payments";
-import PortfolioGreeksPanel from "./PortfolioGreeksPanel";
 import { useEffect, useMemo } from "react";
 import { getSupabaseClient } from "@/lib/supabase/client";
 import { EVALUATION_FEE_CENTS, formatUsd } from "@/lib/constants";
@@ -41,7 +40,6 @@ export default function TradeClient({ accountId }: { accountId: string }) {
     portfolioGreeks,
     placeStrategy,
     availableCash,
-    reserved,
   } = useAccount(accountId);
 
   const searchParams = useSearchParams();
@@ -101,31 +99,16 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
             Evaluation Passed
           </div>
-
           <h1 className="text-2xl font-bold tracking-tight">
             Activate Funded Account
           </h1>
-
           <p className="text-xs leading-relaxed text-text-secondary">
             Your evaluation is complete. Complete the one-time activation fee to
             unlock your funded account desk.
           </p>
-
           <div className="text-4xl font-bold font-mono text-text">
             {formatUsd(EVALUATION_FEE_CENTS)}
           </div>
-
-          {paymentSuccess && (
-            <p className="text-xs font-mono text-emerald-400 animate-pulse">
-              Payment received — activating account...
-            </p>
-          )}
-          {paymentCanceled && (
-            <p className="text-xs text-danger">
-              Payment canceled. You can retry whenever you are ready.
-            </p>
-          )}
-
           <form
             action={() => createCheckoutSession(accountId)}
             className="space-y-3"
@@ -137,12 +120,6 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             >
               {paymentSuccess ? "Activating Desk..." : "Pay & Activate Desk"}
             </button>
-            <p className="text-[11px] text-muted">
-              Stripe test checkout. Card:{" "}
-              <code className="rounded bg-surface-elevated px-1.5 py-0.5 font-mono text-text">
-                4242 4242 4242 4242
-              </code>
-            </p>
           </form>
         </div>
       </div>
@@ -151,11 +128,13 @@ export default function TradeClient({ accountId }: { accountId: string }) {
 
   const dailyPnL = equity - account.day_start_equity;
   const totalPnL = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const hasOptionExposure =
+    Math.abs(portfolioGreeks.delta) > 0 || Math.abs(portfolioGreeks.theta) > 0;
 
   return (
-    <div className="flex-1 w-full max-w-[1720px] mx-auto p-3 md:p-4 space-y-3">
-      {/* ── Top Metric Ticker Bar ── */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface/90 px-4 py-2.5 backdrop-blur-md font-mono text-xs">
+    <div className="flex-1 w-full max-w-[1720px] mx-auto p-3 md:p-4 space-y-2.5">
+      {/* ── Top Metric Header with Inline Greeks ── */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border-subtle bg-surface/90 px-4 py-2 backdrop-blur-md font-mono text-xs">
         <div className="flex items-center gap-3">
           <span className="text-sm font-bold text-text">{account.symbol}</span>
           <span className="badge border-accent/30 bg-accent/10 text-accent text-[10px]">
@@ -166,7 +145,7 @@ export default function TradeClient({ accountId }: { accountId: string }) {
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-5 text-[11px]">
+        <div className="flex flex-wrap items-center gap-4 text-[11px]">
           <div>
             <span className="text-muted mr-1">Mark:</span>
             <span className="font-bold text-text">
@@ -178,19 +157,13 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             <span className="font-bold text-text">${equity.toFixed(2)}</span>
           </div>
           <div>
-            <span className="text-muted mr-1">Balance:</span>
-            <span className="text-text-secondary">
-              ${account.balance.toFixed(2)}
-            </span>
-          </div>
-          <div>
             <span className="text-muted mr-1">Available:</span>
             <span className="text-text-secondary">
               ${availableCash.toFixed(2)}
             </span>
           </div>
           <div>
-            <span className="text-muted mr-1">Daily P&amp;L:</span>
+            <span className="text-muted mr-1">Daily:</span>
             <span
               className={`font-bold ${dailyPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}
             >
@@ -205,35 +178,59 @@ export default function TradeClient({ accountId }: { accountId: string }) {
               {totalPnL >= 0 ? "+" : ""}${totalPnL.toFixed(2)}
             </span>
           </div>
+
+          {/* Inline Live Greeks Strip */}
+          {hasOptionExposure && (
+            <div className="flex items-center gap-2 border-l border-border-subtle pl-3 text-[10px] text-muted">
+              <span>
+                Δ{" "}
+                <strong
+                  className={
+                    portfolioGreeks.delta >= 0
+                      ? "text-emerald-400"
+                      : "text-rose-400"
+                  }
+                >
+                  {portfolioGreeks.delta >= 0 ? "+" : ""}
+                  {portfolioGreeks.delta.toFixed(1)}
+                </strong>
+              </span>
+              <span>
+                Θ{" "}
+                <strong
+                  className={
+                    portfolioGreeks.theta >= 0
+                      ? "text-emerald-400"
+                      : "text-rose-400"
+                  }
+                >
+                  {portfolioGreeks.theta >= 0 ? "+" : ""}
+                  {portfolioGreeks.theta.toFixed(1)}/d
+                </strong>
+              </span>
+              <span>
+                ν{" "}
+                <strong className="text-text">
+                  {portfolioGreeks.vega.toFixed(1)}
+                </strong>
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ── Evaluation Passed Alert Banner ── */}
-      {account.status === "passed" && account.phase === "evaluation" && (
-        <div className="card flex items-center justify-between border-indigo-500/30 bg-indigo-500/10 p-3">
-          <p className="text-xs font-medium text-indigo-300">
-            Evaluation passed —{" "}
-            {fundedAccountId
-              ? "your funded account is ready to trade."
-              : "generating funded account desk..."}
-          </p>
-          {fundedAccountId && (
-            <Link
-              href={`/trade/${fundedAccountId}`}
-              className="btn-buy text-xs py-1"
-            >
-              Open Funded Desk →
-            </Link>
-          )}
-        </div>
-      )}
+      {/* ── Horizontal Risk Ribbon ── */}
+      <RuleStatusBar
+        account={account}
+        equity={equity}
+        peakEquity={peakEquity}
+      />
 
-      {/* ── Main 2-Column Workstation ── */}
+      {/* ── Main Workstation ── */}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_390px] xl:grid-cols-[1fr_420px] items-start">
-        {/* Left Column: Candlestick Chart + Tabbed Bottom Dock */}
+        {/* Left Column */}
         <div className="space-y-3">
           <CandlestickChart closedBars={closedBars} formingBar={formingBar} />
-
           <BottomDock
             positions={positions}
             pendingOrder={pendingOrder}
@@ -245,8 +242,8 @@ export default function TradeClient({ accountId }: { accountId: string }) {
           />
         </div>
 
-        {/* Right Column: Order Placement Desk (Top Level) + Greeks + Risk Health */}
-        <div className="space-y-3">
+        {/* Right Column: Order Desk Only */}
+        <div>
           <OrderPanel
             account={account}
             positions={positions}
@@ -265,20 +262,6 @@ export default function TradeClient({ accountId }: { accountId: string }) {
             onClosePosition={closePosition}
             onUpdatePositionRisk={updatePositionRisk}
           />
-
-          <PortfolioGreeksPanel greeks={portfolioGreeks} />
-
-          <RuleStatusBar
-            account={account}
-            equity={equity}
-            peakEquity={peakEquity}
-          />
-
-          {isReplayDone && (
-            <div className="card p-2.5 text-center text-xs text-muted font-mono">
-              Replay complete — all historical ticks processed.
-            </div>
-          )}
         </div>
       </div>
     </div>

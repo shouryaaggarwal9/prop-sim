@@ -41,7 +41,7 @@ export default function CandlestickChart({
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: "#71717a",
-        fontSize: 11,
+        fontSize: 10,
         fontFamily: "var(--font-mono, monospace)",
       },
       grid: {
@@ -73,7 +73,7 @@ export default function CandlestickChart({
         secondsVisible: false,
       },
       width: container.clientWidth,
-      height: 440,
+      height: 360, // Fixed height to guarantee X-axis fits on standard laptop viewports
     });
 
     const series = chart.addSeries(CandlestickSeries, {
@@ -122,14 +122,13 @@ export default function CandlestickChart({
 
   return (
     <div className="card overflow-hidden">
-      {/* Chart Header Bar */}
-      <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2.5 bg-surface-elevated/40">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between border-b border-border-subtle px-3 py-1.5 bg-surface-elevated/40">
+        <div className="flex items-center gap-2">
           <span className="font-mono text-xs font-bold text-text">SPY</span>
-          <span className="badge border-border bg-surface text-text-secondary text-[10px] font-mono">
+          <span className="badge border-border bg-surface text-text-secondary text-[9px] font-mono">
             5M
           </span>
-          <span className="text-[11px] text-muted">Synthetic Replay</span>
+          <span className="text-[10px] text-muted">Synthetic Replay</span>
         </div>
         {activePrice !== undefined && (
           <div className="font-mono text-xs font-bold text-text">

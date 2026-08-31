@@ -1,20 +1,18 @@
 import { DEFAULT_RULES } from "@/lib/trading/rules";
 import type { Account } from "@/lib/trading/types";
 
-function MetricGauge({
+function MetricPill({
   label,
   value,
   limit,
   pct,
   tone,
-  prefix = "$",
 }: {
   label: string;
-  value?: number;
-  limit?: number;
+  value: number;
+  limit: number;
   pct: number;
   tone: "accent" | "danger" | "success";
-  prefix?: string;
 }) {
   const clamped = Math.max(0, Math.min(1, pct));
   const isNearBreach = tone === "danger" && clamped >= 0.75;
@@ -22,35 +20,31 @@ function MetricGauge({
 
   const barColor =
     tone === "accent"
-      ? "bg-accent shadow-sm shadow-accent/50"
+      ? "bg-accent"
       : tone === "success"
-        ? "bg-emerald-400 shadow-sm shadow-emerald-400/50"
+        ? "bg-emerald-400"
         : isBreached
-          ? "bg-rose-600 shadow-sm shadow-rose-600/80"
+          ? "bg-rose-600 animate-pulse"
           : isNearBreach
-            ? "bg-amber-400 shadow-sm shadow-amber-400/50"
-            : "bg-rose-400 shadow-sm shadow-rose-400/30";
+            ? "bg-amber-400"
+            : "bg-rose-400";
 
   return (
-    <div className="space-y-1.5 rounded-lg border border-border-subtle bg-surface-elevated/60 p-2.5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-text-secondary font-medium">{label}</span>
-        <span className="font-mono text-[11px] font-semibold text-text">
-          {Math.round(clamped * 100)}%
-          {value !== undefined && limit !== undefined && (
-            <span className="ml-1 text-[10px] text-muted font-normal">
-              ({prefix}
-              {value.toFixed(0)} / {prefix}
-              {limit.toFixed(0)})
-            </span>
-          )}
-        </span>
-      </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-surface-hover p-px">
-        <div
-          className={`h-full rounded-full transition-all duration-300 ${barColor}`}
-          style={{ width: `${clamped * 100}%` }}
-        />
+    <div className="flex flex-1 items-center gap-2.5 rounded-lg border border-border-subtle bg-surface-elevated/60 px-3 py-1.5 font-mono text-[11px]">
+      <div className="flex-1">
+        <div className="flex justify-between text-muted">
+          <span>{label}</span>
+          <span className="font-semibold text-text">
+            ${value.toFixed(0)} / ${limit.toFixed(0)} (
+            {Math.round(clamped * 100)}%)
+          </span>
+        </div>
+        <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-hover">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${barColor}`}
+            style={{ width: `${clamped * 100}%` }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -78,71 +72,31 @@ export default function RuleStatusBar({
   const profitTarget = account.starting_balance * DEFAULT_RULES.profitTargetPct;
   const profitProgress = totalProfit / profitTarget;
 
-  const currentDayPnL = equity - account.day_start_equity;
-  const allDailyPnls = [...account.daily_pnls, currentDayPnL];
-  const maxSingleDayProfit = Math.max(0, ...allDailyPnls);
-  const consistencyLimit =
-    totalProfit > 0 ? totalProfit * DEFAULT_RULES.consistencyPct : 0;
-  const consistencyUsed =
-    consistencyLimit > 0 ? maxSingleDayProfit / consistencyLimit : 0;
-
   return (
-    <div className="card p-4 space-y-3">
-      <div className="flex items-center justify-between border-b border-border-subtle pb-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-text font-mono">
-          {isFunded ? "Funded Risk Parameters" : "Evaluation Rules Health"}
-        </h3>
-        <span className="badge border-border bg-surface-hover text-text-secondary text-[10px] font-mono">
-          Strict Mode
-        </span>
-      </div>
-
-      <div className="space-y-2">
-        {!isFunded && (
-          <>
-            <MetricGauge
-              label="Profit Target (6.0%)"
-              value={Math.max(0, totalProfit)}
-              limit={profitTarget}
-              pct={profitProgress}
-              tone="accent"
-            />
-            {totalProfit > 0 && (
-              <MetricGauge
-                label="Consistency Concentration (Max 40%)"
-                value={maxSingleDayProfit}
-                limit={consistencyLimit}
-                pct={consistencyUsed}
-                tone="danger"
-              />
-            )}
-          </>
-        )}
-
-        <MetricGauge
-          label="Intraday Loss Used (3.0% Max)"
-          value={dailyLossUsedAmount}
-          limit={dailyLossLimit}
-          pct={dailyLossUsed}
-          tone="danger"
+    <div className="flex flex-wrap items-center gap-2">
+      {!isFunded && (
+        <MetricPill
+          label="Profit Target"
+          value={Math.max(0, totalProfit)}
+          limit={profitTarget}
+          pct={profitProgress}
+          tone="accent"
         />
-
-        <MetricGauge
-          label="Trailing Drawdown Used (6.0% Max)"
-          value={drawdownUsedAmount}
-          limit={trailingLimit}
-          pct={drawdownUsed}
-          tone="danger"
-        />
-      </div>
-
-      {isFunded && (
-        <p className="text-[11px] leading-relaxed text-muted">
-          Funded accounts operate with no profit ceiling. Keep daily loss and
-          peak trailing drawdowns within risk boundaries to maintain funded
-          status.
-        </p>
       )}
+      <MetricPill
+        label="Intraday Loss"
+        value={dailyLossUsedAmount}
+        limit={dailyLossLimit}
+        pct={dailyLossUsed}
+        tone="danger"
+      />
+      <MetricPill
+        label="Trailing Drawdown"
+        value={drawdownUsedAmount}
+        limit={trailingLimit}
+        pct={drawdownUsed}
+        tone="danger"
+      />
     </div>
   );
 }

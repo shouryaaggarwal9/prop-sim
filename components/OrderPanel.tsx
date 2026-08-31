@@ -8,9 +8,7 @@ import type {
   Position,
   Side,
 } from "@/lib/trading/types";
-import { type OptionsChain, getLegPrice } from "@/lib/market/options";
-import { isOptionType } from "@/lib/trading/types";
-import { positionPnl } from "@/lib/trading/engine";
+import { type OptionsChain } from "@/lib/market/options";
 import {
   type StrategyType,
   type StrategyLegInput,
@@ -22,8 +20,8 @@ type InstrumentTab = "equity" | "options" | "strategies";
 
 export default function OrderPanel({
   account,
-  positions,
-  pendingOrder,
+  positions: _positions,
+  pendingOrder: _pendingOrder,
   currentPrice,
   buyingPower,
   availableCash,
@@ -34,9 +32,9 @@ export default function OrderPanel({
   onPlaceOrder,
   onPlaceOptionOrder,
   onPlaceStrategy,
-  onCancelOrder,
-  onClosePosition,
-  onUpdatePositionRisk,
+  onCancelOrder: _onCancelOrder,
+  onClosePosition: _onClosePosition,
+  onUpdatePositionRisk: _onUpdatePositionRisk,
 }: {
   account: Account;
   positions: Position[];
@@ -86,12 +84,6 @@ export default function OrderPanel({
   const [contractQty, setContractQty] = useState(1);
   const disabled = account.status !== "active" || busy;
 
-  const equityPos = positions.find((p) => p.instrument_type === "equity");
-  const optionPositions = positions.filter(
-    (p): p is Position & { instrument_type: "call" | "put" } =>
-      p.instrument_type === "call" || p.instrument_type === "put",
-  );
-
   async function handlePlace(side: Side) {
     setBusy(true);
     await onPlaceOrder(
@@ -112,148 +104,127 @@ export default function OrderPanel({
     setBusy(false);
   }
 
-  async function handleClose() {
-    setBusy(true);
-    await onClosePosition();
-    setBusy(false);
-  }
-
-  async function handleCancel() {
-    setBusy(true);
-    await onCancelOrder();
-    setBusy(false);
-  }
-
-  async function handleUpdateRisk() {
-    setBusy(true);
-    await onUpdatePositionRisk({
-      stopLoss: stopLoss === "" ? null : stopLoss,
-      takeProfit: takeProfit === "" ? null : takeProfit,
-    });
-    setBusy(false);
-  }
-
-  /* ── 1. ACTIVE POSITIONS VIEW ── */
-  if (positions.length > 0) {
-    return (
-      <div className="card space-y-4 p-4 font-mono">
-        <div className="flex items-center justify-between border-b border-border-subtle pb-2.5">
-          <div className="flex items-center gap-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-text">
-              Active Inventory
-            </h3>
-            <span className="badge border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-[10px]">
-              {positions.length} Open
-            </span>
-          </div>
+  return (
+    <div className="card flex h-97.5 flex-col justify-between p-3.5 font-mono text-xs">
+      <div>
+        {/* Top Header */}
+        <div className="mb-2 flex items-center justify-between border-b border-border-subtle pb-1.5">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-text">
+            Order Desk
+          </h3>
           <span className="text-[10px] text-muted uppercase">
-            Market Exposure
+            {leverage}x Leverage
           </span>
         </div>
 
-        {equityPos && (
-          <div className="rounded-xl border border-border-subtle bg-surface-elevated/70 p-3 space-y-2 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold text-text">
-                <span
-                  className={`badge mr-2 text-[10px] ${
-                    equityPos.side === "long"
-                      ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
-                      : "border-rose-500/20 bg-rose-500/10 text-rose-400"
-                  }`}
-                >
-                  {equityPos.side.toUpperCase()}
-                </span>
-                {equityPos.quantity} SPY @ ${equityPos.entry_price.toFixed(2)}
-              </span>
-              <span
-                className={`font-bold tabular-nums ${
-                  positionPnl(equityPos, currentPrice) >= 0
-                    ? "text-emerald-400"
-                    : "text-rose-400"
-                }`}
-              >
-                {positionPnl(equityPos, currentPrice) >= 0 ? "+" : ""}$
-                {positionPnl(equityPos, currentPrice).toFixed(2)}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-4 text-[11px] text-muted border-t border-border-subtle pt-2">
-              <span>
-                SL:{" "}
-                {equityPos.stop_loss_price != null
-                  ? `$${equityPos.stop_loss_price.toFixed(2)}`
-                  : "None"}
-              </span>
-              <span>
-                TP:{" "}
-                {equityPos.take_profit_price != null
-                  ? `$${equityPos.take_profit_price.toFixed(2)}`
-                  : "None"}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {optionPositions.map((pos) => {
-          const optionType = isOptionType(pos.instrument_type)
-            ? pos.instrument_type
-            : null;
-          const leg =
-            optionType && optionsChain
-              ? getLegPrice(optionsChain, optionType, pos.strike ?? 0)
-              : null;
-          const mark = leg ? (leg.bid + leg.ask) / 2 : pos.entry_price;
-          const unrealized = positionPnl(pos, mark);
-
-          return (
-            <div
-              key={pos.id}
-              className="rounded-xl border border-border-subtle bg-surface-elevated/70 p-3 space-y-2 text-xs"
+        {/* Primary Tabs */}
+        <div className="mb-2.5 flex rounded-lg border border-border-subtle bg-surface-elevated/80 p-0.5 font-sans">
+          {(["equity", "options", "strategies"] as InstrumentTab[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`flex-1 rounded-md py-1 text-xs font-semibold uppercase tracking-wider transition-all ${
+                t === tab
+                  ? "bg-surface text-text border border-border-subtle shadow-sm"
+                  : "text-muted hover:text-text"
+              }`}
+              onClick={() => {
+                setTab(t);
+                setSelectedStrike(null);
+              }}
             >
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="badge border-border bg-surface text-text font-semibold uppercase text-[10px] mr-1.5">
-                    {pos.instrument_type}
-                  </span>
-                  <span className="text-text font-medium">
-                    {pos.quantity} × ${pos.strike?.toFixed(2)} ({pos.side})
-                  </span>
-                </div>
-                <span
-                  className={`font-bold tabular-nums ${
-                    unrealized >= 0 ? "text-emerald-400" : "text-rose-400"
-                  }`}
-                >
-                  {unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)}
-                </span>
-              </div>
-              <div className="flex justify-between text-[11px] text-muted border-t border-border-subtle pt-1.5">
-                <span>Entry: ${pos.entry_price.toFixed(2)}</span>
-                <span>Mark: ${mark.toFixed(2)}</span>
-              </div>
-            </div>
-          );
-        })}
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
 
-        {equityPos && (
-          <div className="space-y-2 rounded-xl border border-border-subtle bg-surface-elevated/40 p-3 text-xs">
-            <div className="text-[10px] uppercase text-muted font-semibold">
-              Intraday Risk Parameters
+      {/* Main Tab Views with Pinned Bounding Heights */}
+      {tab === "equity" ? (
+        <div className="flex h-80 flex-col justify-between">
+          <div className="space-y-2">
+            {/* Order Type Selector */}
+            <div className="grid grid-cols-3 gap-1">
+              {ORDER_TYPES.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  className={`btn-secondary py-1 text-[10px] capitalize ${
+                    type === orderType
+                      ? "border-accent text-accent bg-accent/10"
+                      : "text-text-secondary"
+                  }`}
+                  onClick={() => setOrderType(type)}
+                >
+                  {type}
+                </button>
+              ))}
             </div>
+
+            {/* Quantity and Trigger Price Row */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="mb-1 block text-[10px] text-muted">
-                  Stop Loss ($)
+                <div className="mb-0.5 flex items-center justify-between">
+                  <label className="text-[9px] uppercase text-muted">
+                    Quantity
+                  </label>
+                  <button
+                    type="button"
+                    className="text-[9px] text-accent hover:underline"
+                    onClick={() => setShareQty(Math.max(1, maxQuantity))}
+                  >
+                    Max: {maxQuantity}
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  className="input py-1 text-xs"
+                  value={shareQty}
+                  onChange={(e) =>
+                    setShareQty(Math.max(1, Number(e.target.value)))
+                  }
+                />
+              </div>
+
+              {/* Reserved Trigger Price space keeps height uniform */}
+              <div>
+                <label className="mb-0.5 block text-[9px] uppercase text-muted">
+                  {orderType === "market"
+                    ? "Order Type"
+                    : orderType === "limit"
+                      ? "Limit Price"
+                      : "Stop Price"}
+                </label>
+                {orderType === "market" ? (
+                  <div className="rounded-lg border border-border-subtle bg-surface-elevated/40 py-1 px-2 text-center text-xs text-muted">
+                    Market Fill
+                  </div>
+                ) : (
+                  <input
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    className="input py-1 text-xs"
+                    value={triggerPrice}
+                    onChange={(e) => setTriggerPrice(Number(e.target.value))}
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Risk Inputs */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-0.5 block text-[9px] uppercase text-muted">
+                  Stop Loss
                 </label>
                 <input
                   type="number"
                   min={0.01}
                   step={0.01}
-                  className="input text-xs"
-                  placeholder={
-                    equityPos.stop_loss_price?.toFixed(2) ?? "Optional"
-                  }
+                  className="input py-1 text-xs"
+                  placeholder="Optional"
                   value={stopLoss}
                   onChange={(e) =>
                     setStopLoss(
@@ -263,17 +234,15 @@ export default function OrderPanel({
                 />
               </div>
               <div>
-                <label className="mb-1 block text-[10px] text-muted">
-                  Take Profit ($)
+                <label className="mb-0.5 block text-[9px] uppercase text-muted">
+                  Take Profit
                 </label>
                 <input
                   type="number"
                   min={0.01}
                   step={0.01}
-                  className="input text-xs"
-                  placeholder={
-                    equityPos.take_profit_price?.toFixed(2) ?? "Optional"
-                  }
+                  className="input py-1 text-xs"
+                  placeholder="Optional"
                   value={takeProfit}
                   onChange={(e) =>
                     setTakeProfit(
@@ -283,221 +252,23 @@ export default function OrderPanel({
                 />
               </div>
             </div>
-            <button
-              type="button"
-              className="btn-secondary w-full py-1.5 text-xs"
-              disabled={disabled}
-              onClick={handleUpdateRisk}
-            >
-              Update Protection
-            </button>
-          </div>
-        )}
 
-        <button
-          type="button"
-          className="btn-sell w-full py-2.5 text-xs font-bold"
-          disabled={busy}
-          onClick={handleClose}
-        >
-          {busy ? "Flattening..." : "Flatten All Positions"}
-        </button>
-      </div>
-    );
-  }
-
-  /* ── 2. PENDING ORDER VIEW ── */
-  if (pendingOrder) {
-    return (
-      <div className="card space-y-4 p-4 font-mono text-xs">
-        <div className="flex items-center justify-between border-b border-border-subtle pb-2.5">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-text">
-            Queued Order
-          </h3>
-          <span className="badge border-amber-500/30 bg-amber-500/10 text-amber-400 text-[10px]">
-            Trigger Pending
-          </span>
-        </div>
-
-        <div className="rounded-xl border border-border-subtle bg-surface-elevated/70 p-3 space-y-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="font-semibold capitalize text-text">
-              {pendingOrder.order_type} {pendingOrder.side}
-            </span>
-            <span className="font-bold text-accent">
-              {pendingOrder.quantity} SPY @ $
-              {pendingOrder.trigger_price.toFixed(2)}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-4 text-[11px] text-muted border-t border-border-subtle pt-2">
-            <span>
-              SL:{" "}
-              {pendingOrder.stop_loss_price != null
-                ? `$${pendingOrder.stop_loss_price.toFixed(2)}`
-                : "None"}
-            </span>
-            <span>
-              TP:{" "}
-              {pendingOrder.take_profit_price != null
-                ? `$${pendingOrder.take_profit_price.toFixed(2)}`
-                : "None"}
-            </span>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          className="btn-secondary w-full py-2.5 text-xs text-rose-400 hover:border-rose-500/30 hover:bg-rose-500/10"
-          disabled={busy}
-          onClick={handleCancel}
-        >
-          {busy ? "Cancelling..." : "Cancel Queued Order"}
-        </button>
-      </div>
-    );
-  }
-
-  /* ── 3. ORDER ENTRY VIEW ── */
-  return (
-    <div className="card space-y-4 p-4 font-mono text-xs">
-      <div className="flex items-center justify-between border-b border-border-subtle pb-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-text font-mono">
-          Order Placement Desk
-        </h3>
-        <span className="text-[10px] text-muted font-mono uppercase">
-          Leverage: {leverage}x
-        </span>
-      </div>
-
-      {/* Primary Tab Navigation */}
-      <div className="flex rounded-lg border border-border-subtle bg-surface-elevated/80 p-1 font-sans">
-        {(["equity", "options", "strategies"] as InstrumentTab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={`flex-1 rounded-md py-1.5 text-xs font-semibold uppercase tracking-wider transition-all ${
-              t === tab
-                ? "bg-surface text-text border border-border-subtle shadow-sm"
-                : "text-muted hover:text-text"
-            }`}
-            onClick={() => {
-              setTab(t);
-              setSelectedStrike(null);
-            }}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
-
-      {tab === "equity" ? (
-        <div className="space-y-3">
-          {/* Order Type Selector */}
-          <div className="grid grid-cols-3 gap-1">
-            {ORDER_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                className={`btn-secondary py-1 text-[11px] capitalize ${
-                  type === orderType
-                    ? "border-accent text-accent bg-accent/10"
-                    : "text-text-secondary"
-                }`}
-                onClick={() => setOrderType(type)}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <label className="text-[10px] uppercase text-muted">
-                Quantity (Shares)
-              </label>
-              <button
-                type="button"
-                className="text-[11px] text-accent hover:underline"
-                onClick={() => setShareQty(Math.max(1, maxQuantity))}
-              >
-                Max: {maxQuantity}
-              </button>
+            <div className="flex items-center justify-between text-[10px] text-muted border-t border-border-subtle pt-1.5">
+              <span>Buying Power</span>
+              <span className="font-semibold text-text">
+                ${buyingPower.toFixed(2)}
+              </span>
             </div>
-            <input
-              type="number"
-              min={1}
-              className="input text-xs"
-              value={shareQty}
-              onChange={(e) => setShareQty(Math.max(1, Number(e.target.value)))}
-            />
+
+            {orderError && (
+              <div className="rounded border border-rose-500/20 bg-rose-500/10 p-1 text-[10px] text-rose-400">
+                {orderError}
+              </div>
+            )}
           </div>
 
-          {orderType !== "market" && (
-            <div>
-              <label className="mb-1 block text-[10px] uppercase text-muted">
-                {orderType === "limit"
-                  ? "Limit Execution Price"
-                  : "Stop Trigger Price"}
-              </label>
-              <input
-                type="number"
-                min={0.01}
-                step={0.01}
-                className="input text-xs"
-                value={triggerPrice}
-                onChange={(e) => setTriggerPrice(Number(e.target.value))}
-              />
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="mb-1 block text-[10px] uppercase text-muted">
-                Stop Loss
-              </label>
-              <input
-                type="number"
-                min={0.01}
-                step={0.01}
-                className="input text-xs"
-                placeholder="Optional"
-                value={stopLoss}
-                onChange={(e) =>
-                  setStopLoss(
-                    e.target.value === "" ? "" : Number(e.target.value),
-                  )
-                }
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10px] uppercase text-muted">
-                Take Profit
-              </label>
-              <input
-                type="number"
-                min={0.01}
-                step={0.01}
-                className="input text-xs"
-                placeholder="Optional"
-                value={takeProfit}
-                onChange={(e) =>
-                  setTakeProfit(
-                    e.target.value === "" ? "" : Number(e.target.value),
-                  )
-                }
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between text-[11px] text-muted border-t border-border-subtle pt-2">
-            <span>Buying Power</span>
-            <span className="font-semibold text-text">
-              ${buyingPower.toFixed(2)}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 pt-1">
+          {/* Pinned Equity Actions */}
+          <div className="grid grid-cols-2 gap-2 border-t border-border-subtle pt-2">
             <button
               type="button"
               className="btn-buy py-2.5 text-xs font-bold"
@@ -517,57 +288,54 @@ export default function OrderPanel({
           </div>
         </div>
       ) : tab === "options" ? (
-        <div className="space-y-3">
-          {/* Sub-tab: Call / Put */}
-          <div className="grid grid-cols-2 gap-1 font-sans">
-            {(["call", "put"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                className={`btn-secondary py-1 text-xs capitalize ${
-                  t === optionSubTab
-                    ? t === "call"
-                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
-                      : "border-rose-500/40 bg-rose-500/10 text-rose-400"
-                    : "text-muted"
-                }`}
-                onClick={() => setOptionSubTab(t)}
-              >
-                Buy {t}
-              </button>
-            ))}
-          </div>
-
-          {!optionsChain ? (
-            <div className="py-8 text-center text-xs text-muted">
-              Loading 0DTE options chain...
-            </div>
-          ) : (
-            <>
+        <div className="flex h-80 flex-col justify-between">
+          <div className="space-y-1.5">
+            <div className="grid grid-cols-[1fr_75px] gap-2">
+              <div className="grid grid-cols-2 gap-1 font-sans">
+                {(["call", "put"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    className={`btn-secondary py-1 text-xs capitalize ${
+                      t === optionSubTab
+                        ? t === "call"
+                          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                          : "border-rose-500/40 bg-rose-500/10 text-rose-400"
+                        : "text-muted"
+                    }`}
+                    onClick={() => setOptionSubTab(t)}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
               <div>
-                <label className="mb-1 block text-[10px] uppercase text-muted">
-                  Contracts (×100)
-                </label>
                 <input
                   type="number"
                   min={1}
-                  className="input text-xs"
+                  className="input py-1 text-xs"
+                  placeholder="Qty"
                   value={contractQty}
                   onChange={(e) =>
                     setContractQty(Math.max(1, Number(e.target.value)))
                   }
                 />
               </div>
+            </div>
 
-              <div className="max-h-52 overflow-y-auto rounded-lg border border-border-subtle bg-surface-elevated/40">
-                <table className="w-full text-[11px]">
-                  <thead className="sticky top-0 bg-surface border-b border-border-subtle text-[10px] uppercase text-muted">
+            {!optionsChain ? (
+              <div className="py-8 text-center text-xs text-muted">
+                Loading options chain...
+              </div>
+            ) : (
+              <div className="max-h-35 overflow-y-auto rounded-lg border border-border-subtle bg-surface-elevated/40">
+                <table className="w-full text-[10px]">
+                  <thead className="sticky top-0 bg-surface border-b border-border-subtle text-[9px] uppercase text-muted">
                     <tr>
-                      <th className="px-2 py-1.5 font-normal">Strike</th>
-                      <th className="px-2 py-1.5 font-normal">Bid</th>
-                      <th className="px-2 py-1.5 font-normal">Ask</th>
-                      <th className="px-2 py-1.5 font-normal">Δ</th>
-                      <th className="px-2 py-1.5 font-normal">IV</th>
+                      <th className="px-1.5 py-1 font-normal">Strike</th>
+                      <th className="px-1.5 py-1 font-normal">Bid</th>
+                      <th className="px-1.5 py-1 font-normal">Ask</th>
+                      <th className="px-1.5 py-1 font-normal">Δ</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-subtle">
@@ -584,74 +352,49 @@ export default function OrderPanel({
                         }`}
                         onClick={() => setSelectedStrike(leg.strike)}
                       >
-                        <td className="px-2 py-1.5 text-text">
+                        <td className="px-1.5 py-1 text-text">
                           ${leg.strike.toFixed(2)}
                         </td>
-                        <td className="px-2 py-1.5 text-muted">
+                        <td className="px-1.5 py-1 text-muted">
                           ${leg.bid.toFixed(2)}
                         </td>
-                        <td className="px-2 py-1.5 text-muted">
+                        <td className="px-1.5 py-1 text-muted">
                           ${leg.ask.toFixed(2)}
                         </td>
-                        <td className="px-2 py-1.5">{leg.delta.toFixed(2)}</td>
-                        <td className="px-2 py-1.5 text-muted">
-                          {(leg.iv * 100).toFixed(1)}%
-                        </td>
+                        <td className="px-1.5 py-1">{leg.delta.toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+            )}
 
-              {selectedStrike && (
-                <div className="rounded-lg border border-border-subtle bg-surface-elevated/70 p-2 text-[11px] text-text-secondary space-y-1">
-                  <div className="flex justify-between">
-                    <span>Target Contract:</span>
-                    <span className="font-semibold text-text uppercase">
-                      {optionSubTab} @ ${selectedStrike.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Premium Outflow:</span>
-                    <span className="font-bold text-accent">
-                      $
-                      {(() => {
-                        const leg = (
-                          optionSubTab === "call"
-                            ? optionsChain.calls
-                            : optionsChain.puts
-                        ).find((l) => l.strike === selectedStrike);
-                        return leg
-                          ? (leg.ask * contractQty * 100).toFixed(2)
-                          : "0.00";
-                      })()}
-                    </span>
-                  </div>
-                </div>
-              )}
+            <div className="flex items-center justify-between text-[10px] text-muted">
+              <span>Cash Available:</span>
+              <span className="font-semibold text-text">
+                ${availableCash.toFixed(2)}
+              </span>
+            </div>
+          </div>
 
-              <div className="flex items-center justify-between text-[11px] text-muted">
-                <span>Available Cash:</span>
-                <span className="font-semibold text-text">
-                  ${availableCash.toFixed(2)}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                className={`w-full py-2.5 text-xs font-bold ${
-                  optionSubTab === "call" ? "btn-buy" : "btn-sell"
-                }`}
-                disabled={disabled || !selectedStrike}
-                onClick={() => handleOptionPlace(optionSubTab)}
-              >
-                Place {optionSubTab.toUpperCase()} Order
-              </button>
-            </>
-          )}
+          {/* Pinned Option CTA */}
+          <div className="border-t border-border-subtle pt-2">
+            <button
+              type="button"
+              className={`w-full py-2.5 text-xs font-bold uppercase tracking-wider ${
+                optionSubTab === "call" ? "btn-buy" : "btn-sell"
+              }`}
+              disabled={disabled || !selectedStrike}
+              onClick={() => handleOptionPlace(optionSubTab)}
+            >
+              {selectedStrike
+                ? `Buy ${optionSubTab.toUpperCase()} @ $${selectedStrike.toFixed(2)}`
+                : "Select a Strike"}
+            </button>
+          </div>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div>
           {!optionsChain ? (
             <div className="py-8 text-center text-xs text-muted">
               Loading options chain...
@@ -665,18 +408,6 @@ export default function OrderPanel({
               leverage={leverage}
             />
           )}
-        </div>
-      )}
-
-      {orderError && (
-        <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-2.5 text-[11px] text-rose-400">
-          {orderError}
-        </div>
-      )}
-
-      {account.status !== "active" && (
-        <div className="rounded-lg border border-border-subtle bg-surface-elevated p-2.5 text-[11px] text-muted text-center">
-          Trading suspended — Account is {account.status}.
         </div>
       )}
     </div>

@@ -1,13 +1,11 @@
 const RISK_FREE_RATE = 0.05;
-const STRIKE_INCREMENT = 2.5;
-const STRIKE_RANGE_PCT = 0.05;
-const SKEW = -6.0;
-const SMILE = 45.0;
-const ODT_VOL_MULTIPLIER = 2.0; // 0DTE ATM ≈ 2× VIX. Tune 1.5–2.5.
+const STRIKE_INCREMENT = 1.0; // 1-point strikes for realistic 0DTE SPY chains
+const STRIKE_RANGE_PCT = 0.035; // ±3.5% strike span covers realistic intraday moves
+const SKEW = -8.0; // Realistic OTM put skew for 0DTE index options
+const SMILE = 60.0;
 const TRADING_HOURS_PER_DAY = 6.5;
-// const TRADING_DAYS_PER_YEAR = 252;
-// const ANNUAL_TRADING_HOURS = TRADING_HOURS_PER_DAY * TRADING_DAYS_PER_YEAR; // 1638 hours
-const CALENDAR_HOURS_PER_YEAR = 365 * 24; // 8760 hours
+const TRADING_DAYS_PER_YEAR = 252;
+const ANNUAL_TRADING_HOURS = TRADING_HOURS_PER_DAY * TRADING_DAYS_PER_YEAR; // 1,638 trading hours
 
 function normCDF(x: number): number {
   const a1 = 0.254829592;
@@ -48,7 +46,7 @@ function blackScholes(
   type: "call" | "put",
 ): BSGreeks {
   // 1 minute floor in trading-year terms
-  const minT = 1 / (CALENDAR_HOURS_PER_YEAR * 60);
+  const minT = 1 / (ANNUAL_TRADING_HOURS * 60);
   const effectiveT = Math.max(T, minT);
 
   const d1 =
@@ -76,14 +74,14 @@ function blackScholes(
     theta =
       (-(S * pdfD1 * sigma) / (2 * Math.sqrt(effectiveT)) -
         r * K * discount * Nd2) /
-      365;
+      TRADING_DAYS_PER_YEAR;
   } else {
     price = K * discount * Nd2Neg - S * Nd1Neg;
     delta = Nd1 - 1;
     theta =
       (-(S * pdfD1 * sigma) / (2 * Math.sqrt(effectiveT)) +
         r * K * discount * Nd2Neg) /
-      365;
+      TRADING_DAYS_PER_YEAR;
   }
 
   gamma = pdfD1 / (S * sigma * Math.sqrt(effectiveT));
@@ -110,8 +108,8 @@ export interface OptionLeg {
   ask: number;
   delta: number;
   gamma: number;
-  theta: number; // per trading hour
-  thetaDaily: number; // original per-day value
+  theta: number;
+  thetaDaily: number;
   vega: number;
   intrinsic: number;
   timeValue: number;
@@ -133,22 +131,20 @@ function computeIV(
   hoursToClose: number,
 ): number {
   const moneyness = Math.log(strike / underlyingPrice);
+  const baseIV = (vix / 100) * 1.25; // 0DTE implied vol typically trades at premium over spot VIX
 
-  // Base IV reflects realistic 0DTE annualized implied volatility (1.1x - 1.3x VIX)
-  const baseIV = vix * 1.15;
-
-  // Steep 0DTE smile: OTM strikes retain a volatility premium
-  // As expiry approaches, moneyness curvature steepens naturally
-  const timeDampener = Math.max(0.2, Math.sqrt(hoursToClose / 6.5));
-  const skewTerm = (SKEW / timeDampener) * moneyness;
-  const smileTerm = (SMILE / timeDampener) * Math.pow(moneyness, 2);
+  const timeDampener = Math.max(
+    0.2,
+    Math.sqrt(hoursToClose / TRADING_HOURS_PER_DAY),
+  );
+  const skewTerm = (SKEW / 100 / timeDampener) * moneyness;
+  const smileTerm = (SMILE / 100 / timeDampener) * Math.pow(moneyness, 2);
 
   let iv = baseIV + skewTerm + smileTerm;
   const pctDist = Math.abs(strike - underlyingPrice) / underlyingPrice;
-  iv *= 1 + 2.0 * pctDist;
+  iv *= 1 + 1.5 * pctDist;
 
-  // Floor at 8% IV, cap at 150%
-  return Math.max(0.08, Math.min(iv / 100, 1.5));
+  return Math.max(0.1, Math.min(iv, 2.0));
 }
 
 function computeSpread(
@@ -157,17 +153,13 @@ function computeSpread(
   optionPrice: number,
   hoursToClose: number,
 ): number {
-  const pctDist = Math.abs(strike - underlyingPrice) / underlyingPrice; // Base spread scales with option value (e.g., 1.5% to 3% of premium)
-
-  const priceSpread = Math.max(0.02, optionPrice * 0.025); // Wing penalty: wider spreads away from ATM
-
-  const wingMultiplier = 1.0 + 3.0 * pctDist; // Time decay penalty: spreads widen into the final 90 minutes
-
+  const pctDist = Math.abs(strike - underlyingPrice) / underlyingPrice;
+  const baseFraction = Math.max(0.01, optionPrice * 0.02);
+  const wingMultiplier = 1.0 + 4.0 * pctDist;
   const timeMultiplier =
-    hoursToClose < 1.5 ? Math.max(1.0, 1.5 / Math.max(0.1, hoursToClose)) : 1.0; // Minimum tick size (0.01 for under $3, 0.05 typical for standard contracts)
+    hoursToClose < 1.0 ? Math.max(1.0, 1.0 / Math.max(0.1, hoursToClose)) : 1.0;
 
-  const rawSpread = priceSpread * wingMultiplier * timeMultiplier;
-
+  const rawSpread = baseFraction * wingMultiplier * timeMultiplier;
   return Math.max(0.02, Math.round(rawSpread * 100) / 100);
 }
 
@@ -197,7 +189,7 @@ export function generateOptionsChain(
   vix: number,
   hoursToClose: number,
 ): OptionsChain {
-  const T = hoursToClose / CALENDAR_HOURS_PER_YEAR;
+  const T = hoursToClose / ANNUAL_TRADING_HOURS;
   const strikes = generateStrikes(underlyingPrice);
   const atmStrike =
     Math.round(underlyingPrice / STRIKE_INCREMENT) * STRIKE_INCREMENT;
@@ -236,10 +228,10 @@ export function generateOptionsChain(
       strike,
       putGreeks.price,
       hoursToClose,
-    ); // Compute Bid/Ask before object instantiation
+    );
 
     const callBid = Math.max(
-      0,
+      0.01,
       Math.round((callGreeks.price - callSpread / 2) * 100) / 100,
     );
     const callAsk = Math.max(
@@ -248,7 +240,7 @@ export function generateOptionsChain(
     );
 
     const putBid = Math.max(
-      0,
+      0.01,
       Math.round((putGreeks.price - putSpread / 2) * 100) / 100,
     );
     const putAsk = Math.max(
@@ -319,7 +311,6 @@ export function getLegPrice(
   strike: number,
 ): OptionLeg | undefined {
   if (type === "equity") return undefined;
-
   const legs = type === "call" ? chain.calls : chain.puts;
   return legs.find((l) => Math.abs(l.strike - strike) < 0.01);
 }
