@@ -41,7 +41,10 @@ import {
   type MarginLeg,
 } from "./margin";
 
-const TICK_MS = 200;
+// const TICK_MS = 200;
+// const BARS_PER_SIMULATED_DAY = 78;
+
+const TICK_MS = 60000;
 const BARS_PER_SIMULATED_DAY = 78;
 
 async function withLock(
@@ -160,8 +163,14 @@ export function useAccount(accountId: string) {
     return epoch?.bars ?? [];
   }, [account?.epoch]);
 
+  // const replay = useMarketReplay(bars, {
+  //   tickMs: TICK_MS,
+  //   startBarIndex: account?.replay_bar_index ?? 0,
+  // });
+
   const replay = useMarketReplay(bars, {
-    tickMs: TICK_MS,
+    tickMs: 1000, // Price updates every 1.0 second
+    ticksPerCandle: 30, // Candle stays alive and forms for 60 seconds (or 300 for full 5 mins)
     startBarIndex: account?.replay_bar_index ?? 0,
   });
   const currentPrice = replay.formingBar?.close ?? bars[0]?.close ?? 0;
