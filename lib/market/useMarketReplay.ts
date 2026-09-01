@@ -102,6 +102,8 @@ export function useMarketReplay(
         const nextSub = prev.subIndex + 1;
         const upto = bar.ticks.slice(0, nextSub + 1);
 
+        // We need to sync bars if user closes tab or switches to another app and comes back after a while. So we calculate the forming bar based on the current subIndex and the bar's ticks.
+
         const forming: Bar = {
           time: bar.time,
           open: upto[0],
